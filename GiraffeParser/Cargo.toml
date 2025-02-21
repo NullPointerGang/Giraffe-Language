@@ -1,0 +1,9 @@
+[package]
+name = "GiraffeParser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+GiraffeLexer = { path = "../GiraffeLexer" }
+GiraffeAST = { path = "../GiraffeAST" }
+GiraffeVariablesStorage = { path = "../GiraffeVariablesStorage"}
