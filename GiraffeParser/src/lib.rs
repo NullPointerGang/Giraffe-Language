@@ -120,6 +120,7 @@ impl Parser {
         Ok(AstNode::build_program(statements))
     }    
 
+    /// Пропускает коментарии
     fn skip_comments(&mut self) {
         while !self.is_at_end() && 
               (self.current().token_type == TokenType::COMMENT_SINGLELINE ||
@@ -128,6 +129,7 @@ impl Parser {
         }
     }    
 
+    /// Разбирает все ключевые слова и конструкции
     fn parse_statement(&mut self) -> Result<Statement, String> {
         let token = self.current().clone();
         match token.token_type {
@@ -135,11 +137,11 @@ impl Parser {
                 match token.value.as_str() {
                     "func" => self.parse_function_declaration(),
                     "var" | "const" => self.parse_variable_declaration(),
-                    "if" => self.parse_if_statement("if"),
+                    "if" => self.parse_if_statement(),
                     "while" => self.parse_while_statement(),
                     "return" => self.parse_return_statement(),
                     "for" => self.parse_for_statement(),
-                    "try" => Err("Конструкция try/handle не реализована".to_string()),
+                    "try" => self.parse_try_handle_statement(),
                     _ => Err(format!("Неожиданное ключевое слово: {}", token.value)),
                 }
             }
@@ -155,6 +157,29 @@ impl Parser {
             _ => Err(format!("Неожиданный токен в операторе: {:?}", token)),
         }
     }    
+
+
+    fn parse_try_handle_statement(&mut self) -> Result<Statement, String> {
+        self.expect(TokenType::KEYWORD, Some("try"))?;
+        let try_body = self.parse_block()?;
+        
+        self.expect(TokenType::KEYWORD, Some("handle"))?;
+        let catch_body = self.parse_block()?;
+        
+        let finally_body = if self.check(TokenType::KEYWORD, Some("finally")) {
+            self.advance();
+            Some(self.parse_block()?)
+        } else {
+            None
+        };
+        
+        Ok(Statement::try_handle_statement(TryHandleStatement {
+            try_body,
+            catch_body,
+            finally_body,
+        }))
+    }
+    
 
     /// Разбирает цикл for
     fn parse_for_statement(&mut self) -> Result<Statement, String> {
@@ -340,41 +365,47 @@ impl Parser {
     fn infer_type_from_expression(&self, expr: &Expression) -> String {
         match expr {
             Expression::Literal(Literal::Integer(_)) => "int".to_string(),
-            Expression::Literal(Literal::Float(_))   => "float".to_string(),
-            Expression::Literal(Literal::String(_))  => "string".to_string(),
+            Expression::Literal(Literal::Float(_)) => "float".to_string(),
+            Expression::Literal(Literal::String(_)) => "string".to_string(),
             Expression::Literal(Literal::Boolean(_)) => "bool".to_string(),
-            Expression::Literal(Literal::Null)       => "null".to_string(),
-            Expression::List(_)                       => "list".to_string(),
-            Expression::Tuple(_)                      => "tuple".to_string(),
-            Expression::Dictionary(_)                       => "dict".to_string(),
-            Expression::FunctionCall(_, _)               => "auto".to_string(),
+            Expression::Literal(Literal::Null) => "null".to_string(),
+            Expression::List(_) => "list".to_string(),
+            Expression::Tuple(_) => "tuple".to_string(),
+            Expression::Dictionary(_) => "dict".to_string(),
+            Expression::FunctionCall(_, _) => "auto".to_string(),
             _ => "auto".to_string(),
         }
     }
 
 
     /// Разбирает условный оператор if с опциональными elif и else. 
-    /// (cейчас работает только с if/else)
-    fn parse_if_statement(&mut self, keyword: &str) -> Result<Statement, String> {
-        self.expect(TokenType::KEYWORD, Some(keyword))?;
+    fn parse_if_statement(&mut self) -> Result<Statement, String> {
+        let keyword = self.current().value.clone();
+        if keyword != "if" && keyword != "elif" {
+            return Err(format!("Ожидался 'if' или 'elif', найдено: {}", keyword));
+        }
+        self.advance();
+    
         self.expect(TokenType::BRACKET, Some("("))?;
         let condition = self.parse_expression()?;
         self.expect(TokenType::BRACKET, Some(")"))?;
         let body = self.parse_block()?;
-        let mut elif: Option<IfStatement> = None;
+    
+        let mut elif_branch: Option<Box<IfStatement>> = None;
         let mut else_body: Option<Vec<Statement>> = None;
+
         if self.check(TokenType::KEYWORD, Some("elif")) {
-            if let Statement::IfStatement(if_stmt) = self.parse_if_statement("elif")? {
-                elif = Some(if_stmt);
+            if let Statement::IfStatement(if_stmt) = self.parse_if_statement()? {
+                elif_branch = Some(Box::new(if_stmt));
             } else {
                 return Err("Ожидался if для elif".to_string());
             }
-        }
-        else if self.check(TokenType::KEYWORD, Some("else")) {
+        } else if self.check(TokenType::KEYWORD, Some("else")) {
             self.expect(TokenType::KEYWORD, Some("else"))?;
             else_body = Some(self.parse_block()?);
         }
-        Ok(Statement::if_statement(condition, body, elif, else_body))
+    
+        Ok(Statement::if_statement(condition, body, elif_branch.map(|b| *b), else_body))
     }
 
     /// Разбирает цикл while:

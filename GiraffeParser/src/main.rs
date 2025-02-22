@@ -4,18 +4,15 @@ use GiraffeParser::Parser;
 
 fn main() {
     let source_code = r#"
-            if (a > b) {
-                result = sum(a, b)
-                print!(result)
-            }
-            elif (a == b) {
-                print!("a и b равны")
-            }
-            else {
-                result = sum(a, 2)
-                print!(result.to_str())  // Выводит сумму a и 2
-            }
-
+        try {
+            print!("Попытка выполнения")
+        }
+        handle {
+            print!("Обработка исключения")
+        }
+        finally {
+            print!("Блок finally")
+        }
     "#;
 
     let tokens = Lexer::new().tokenize(source_code);

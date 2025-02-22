@@ -18,6 +18,7 @@ pub enum Statement {
     ExpressionStatement(Expression),
     Block(Vec<Statement>),
     ForInStatement(String, Expression, Vec<Statement>),
+    TryHandleStatement(TryHandleStatement)
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,13 @@ pub enum Expression {
     Tuple(Vec<Expression>),
     Null,
 
+}
+
+#[derive(Debug, Clone)]
+pub struct TryHandleStatement {
+    pub try_body: Vec<Statement>,
+    pub catch_body: Vec<Statement>,
+    pub finally_body: Option<Vec<Statement>>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +183,10 @@ impl Statement {
 
     pub fn for_in_statement(loop_var: String, collection: Expression, body: Vec<Statement>) -> Self {
         Statement::ForInStatement(loop_var, collection, body)
+    }
+
+    pub fn try_handle_statement(try_handle_statement: TryHandleStatement) -> Self {
+        Statement::TryHandleStatement(try_handle_statement)
     }
 }
 
