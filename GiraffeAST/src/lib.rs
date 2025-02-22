@@ -31,7 +31,11 @@ pub enum Expression {
     Dictionary(Vec<(Expression, Expression)>),
     Tuple(Vec<Expression>),
     Null,
-
+    MemberAccess(Box<Expression>, String),
+    MethodCall(Box<Expression>, String, Vec<Expression>),
+    Error(String),
+    Break,
+    Continue,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +192,15 @@ impl Statement {
     pub fn try_handle_statement(try_handle_statement: TryHandleStatement) -> Self {
         Statement::TryHandleStatement(try_handle_statement)
     }
+
+    pub fn break_statement() -> Self {
+        Statement::ExpressionStatement(Expression::Break)
+    }
+
+    pub fn continue_statement() -> Self {
+        Statement::ExpressionStatement(Expression::Continue)
+    }
+
 }
 
 impl Expression {

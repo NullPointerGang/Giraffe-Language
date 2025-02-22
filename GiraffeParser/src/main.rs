@@ -4,14 +4,16 @@ use GiraffeParser::Parser;
 
 fn main() {
     let source_code = r#"
-        try {
-            print!("Попытка выполнения")
-        }
-        handle {
-            print!("Обработка исключения")
-        }
-        finally {
-            print!("Блок finally")
+        while (true) {
+            var x = 5
+            var y = 10
+            var z = x + y
+            if (z > 15) {
+                break
+            }
+            else {
+                continue
+            }
         }
     "#;
 

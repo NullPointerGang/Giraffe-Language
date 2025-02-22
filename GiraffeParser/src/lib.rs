@@ -142,6 +142,8 @@ impl Parser {
                     "return" => self.parse_return_statement(),
                     "for" => self.parse_for_statement(),
                     "try" => self.parse_try_handle_statement(),
+                    "break" => self.parse_break_statement(),
+                    "continue" => self.parse_continue_statement(),
                     _ => Err(format!("Неожиданное ключевое слово: {}", token.value)),
                 }
             }
@@ -149,14 +151,25 @@ impl Parser {
             TokenType::IDENTIFIER => {
                 if self.peek_token_is(TokenType::OPERATOR, Some("=")) {
                     self.parse_assignment()
-                } 
-                else {
+                } else {
                     Err(format!("Неожиданный идентификатор: {}", token.value))
                 }
             }
             _ => Err(format!("Неожиданный токен в операторе: {:?}", token)),
         }
-    }    
+    }        
+
+    /// Разбирает оператор break.
+    fn parse_break_statement(&mut self) -> Result<Statement, String> {
+        self.expect(TokenType::KEYWORD, Some("break"))?;
+        Ok(Statement::break_statement())
+    }
+
+    /// Разбирает оператор continue.
+    fn parse_continue_statement(&mut self) -> Result<Statement, String> {
+        self.expect(TokenType::KEYWORD, Some("continue"))?;
+        Ok(Statement::continue_statement())
+    }
 
 
     fn parse_try_handle_statement(&mut self) -> Result<Statement, String> {
@@ -590,43 +603,42 @@ impl Parser {
     /// Разбирает первичные выражения: литералы, идентификаторы (с возможным вызовом функции),
     /// группировку в круглых скобках, списки и словари.
     fn parse_primary(&mut self) -> Result<Expression, String> {
-        let token = self.current().clone(); // Получаем текущий токен без предварительного advance
-
-        match token.token_type {
+        let token = self.current().clone();
+        
+        let mut expr = match token.token_type {
             TokenType::INTEGER => {
                 let value: i64 = token.value.parse().map_err(|_| {
                     format!("Неверный формат целого числа: {}", token.value)
                 })?;
                 self.advance();
-                Ok(Expression::literal(Literal::Integer(value)))
+                Expression::Literal(Literal::Integer(value))
             }
             TokenType::FLOAT => {
                 let value: f64 = token.value.parse().map_err(|_| {
                     format!("Неверный формат числа с плавающей точкой: {}", token.value)
                 })?;
                 self.advance();
-                Ok(Expression::literal(Literal::Float(value)))
+                Expression::Literal(Literal::Float(value))
             }
             TokenType::STRING => {
                 let trimmed = token.value.trim_matches('"').to_string();
                 self.advance();
-                Ok(Expression::literal(Literal::String(trimmed)))
+                Expression::Literal(Literal::String(trimmed))
             }
             TokenType::BOOLEAN => {
                 let value = token.value == "true";
                 self.advance();
-                Ok(Expression::literal(Literal::Boolean(value)))
+                Expression::Literal(Literal::Boolean(value))
             }
             TokenType::NULL => {
                 self.advance();
-                Ok(Expression::null())
+                Expression::Literal(Literal::Null)
             }
             TokenType::IDENTIFIER => {
-                let mut expr = Expression::variable(token.value.clone());
+                let ident = token.value.clone();
                 self.advance();
-
                 if self.check(TokenType::BRACKET, Some("(")) {
-                    self.expect(TokenType::BRACKET, Some("("))?;
+                    self.advance();
                     let mut args = Vec::new();
                     if !self.check(TokenType::BRACKET, Some(")")) {
                         loop {
@@ -640,30 +652,67 @@ impl Parser {
                         }
                     }
                     self.expect(TokenType::BRACKET, Some(")"))?;
-                    if let Expression::Variable(func_name) = expr {
-                        expr = Expression::function_call(func_name, args);
-                    } else {
-                        return Err("Вызов функции должен начинаться с идентификатора".to_string());
-                    }
+                    Expression::FunctionCall(ident, args)
+                } else {
+                    Expression::Variable(ident)
                 }
-                Ok(expr)
             }
             TokenType::BRACKET => {
                 if token.value == "(" {
                     self.advance();
                     let expr = self.parse_expression()?;
                     self.expect(TokenType::BRACKET, Some(")"))?;
-                    Ok(expr)
+                    expr
                 } else if token.value == "[" {
-                    self.parse_list()
+                    self.parse_list()?
                 } else if token.value == "{" {
-                    self.parse_dictionary()
+                    self.parse_dictionary()?
                 } else {
-                    Err(format!("Неожиданный скобочный символ: {}", token.value))
+                    return Err(format!("Неожиданный скобочный символ: {}", token.value));
                 }
-            }            
-            _ => Err(format!("Неожиданный токен в выражении: {:?}", token)),
+            }
+            _ => return Err(format!("Неожиданный токен в выражении: {:?}", token)),
+        };
+
+        expr = self.parse_postfix(expr)?;
+        Ok(expr)
+    }
+
+    /// Обрабатывает цепочку точечных обращений: вызовы методов или доступ к полям.
+    fn parse_postfix(&mut self, mut expr: Expression) -> Result<Expression, String> {
+        loop {
+            if self.check_operator(".") {
+                self.advance(); // пропускаем точку
+                // Ожидаем идентификатор после точки (название метода или свойства)
+                let member_token = self.expect(TokenType::IDENTIFIER, None)?;
+                let member_name = member_token.value;
+                
+                // Если сразу после идентификатора следует открывающая скобка, это вызов метода
+                if self.check(TokenType::BRACKET, Some("(")) {
+                    self.advance(); // пропускаем '('
+                    let mut args = Vec::new();
+                    if !self.check(TokenType::BRACKET, Some(")")) {
+                        loop {
+                            let arg = self.parse_expression()?;
+                            args.push(arg);
+                            if self.check(TokenType::PUNCTUATION, Some(",")) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect(TokenType::BRACKET, Some(")"))?;
+                    expr = Expression::MethodCall(Box::new(expr), member_name, args);
+                } else {
+                    // Если скобок нет – это доступ к полю
+                    expr = Expression::MemberAccess(Box::new(expr), member_name);
+                }
+            } else {
+                break;
+            }
         }
+        Ok(expr)
     }
 
     /// Разбирает литерал списка: [ expr1, expr2, … ]
@@ -715,8 +764,12 @@ impl Parser {
             return false;
         }
         let token = self.current();
-        token.token_type == TokenType::OPERATOR && token.value == op
-    }
+        if op == "." {
+            (token.token_type == TokenType::OPERATOR || token.token_type == TokenType::PUNCTUATION) && token.value == op
+        } else {
+            token.token_type == TokenType::OPERATOR && token.value == op
+        }
+    }    
 
     fn check_keyword(&self, kw: &str) -> bool {
         if self.is_at_end() {

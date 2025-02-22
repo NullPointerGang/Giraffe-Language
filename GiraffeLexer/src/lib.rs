@@ -72,8 +72,8 @@ impl Lexer {
     pub fn new() -> Self {
         let mut keywords = HashMap::new();
         for kw in &[
-            "const", "func", "var", "if", "elif", "else", "while", "for", "loop",
-            "continue", "exit", "break", "return", "is", "in", "and", "or", "not",
+            "const", "func", "var", "if", "elif", "else", "while", "for",
+            "continue", "break", "return", "is", "in", "and", "or", "not",
             "try", "handle", "finally"
         ] {
             keywords.insert(kw.to_string(), TokenType::KEYWORD);
@@ -100,7 +100,7 @@ impl Lexer {
             (r"\btuple\b", Some(TokenType::ANNOTATION_TYPE)),
 
             // Ключевые слова
-            (r"\b(?:const|func|var|if|elif|else|while|for|loop|continue|exit|break|return|is|in|and|or|not|try|handle|finally|global)\b", Some(TokenType::KEYWORD)),
+            (r"\b(?:const|func|var|if|elif|else|while|for|continue|break|return|is|in|and|or|not|try|handle|finally|global)\b", Some(TokenType::KEYWORD)),
 
             // Логические значения
             (r"\b(?:true|false)\b", Some(TokenType::BOOLEAN)),
