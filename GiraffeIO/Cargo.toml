@@ -1,7 +1,6 @@
 [package]
-name = "GiraffeAST"
+name = "GiraffeIO"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ordered-float = { version = "5.0.0" }

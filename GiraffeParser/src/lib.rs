@@ -1,5 +1,7 @@
 use GiraffeAST::*;
 use GiraffeLexer::{Token, TokenType};
+use std::collections::HashMap;
+use ordered_float::OrderedFloat;
 
 
 /// Структура парсера, содержащая список токенов и текущую позицию в них.
@@ -618,7 +620,7 @@ impl Parser {
                     format!("Неверный формат числа с плавающей точкой: {}", token.value)
                 })?;
                 self.advance();
-                Expression::Literal(Literal::Float(value))
+                Expression::Literal(Literal::Float(OrderedFloat::from(value)))
             }
             TokenType::STRING => {
                 let trimmed = token.value.trim_matches('"').to_string();
@@ -737,13 +739,16 @@ impl Parser {
     /// Разбирает литерал словаря: { key1: value1, key2: value2, … }
     fn parse_dictionary(&mut self) -> Result<Expression, String> {
         self.expect(TokenType::BRACKET, Some("{"))?;
-        let mut pairs = Vec::new();
+        let mut pairs = HashMap::new();
         if !self.check(TokenType::BRACKET, Some("}")) {
             loop {
-                let key = self.parse_expression()?;
+                let key = match self.parse_expression()? {
+                    Expression::Literal(lit) => lit,
+                    _ => return Err("Dictionary keys must be literals".to_string()),
+                };
                 self.expect(TokenType::PUNCTUATION, Some(":"))?;
                 let value = self.parse_expression()?;
-                pairs.push((key, value));
+                pairs.insert(key, value);
                 if self.check(TokenType::PUNCTUATION, Some(",")) {
                     self.advance();
                 } else {
@@ -752,7 +757,7 @@ impl Parser {
             }
         }
         self.expect(TokenType::BRACKET, Some("}"))?;
-        Ok(Expression::dictionary(pairs))
+        Ok(Expression::Dictionary(pairs))
     }
 
     // =========================================================================

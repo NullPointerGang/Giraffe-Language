@@ -1,9 +1,10 @@
 [package]
-name = "GiraffeParser"
+name = "GiraffeInterpreter"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 GiraffeLexer = { path = "../GiraffeLexer" }
-GiraffeAST = { path = "../GiraffeAST" }
+GiraffeAST = { path = "../GiraffeAST"}
+GiraffeParser ={ path = "../GiraffeParser"}
 ordered-float = { version = "5.0.0" }

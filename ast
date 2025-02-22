@@ -1,0 +1,24 @@
+AST: Ok(Program { 
+    statements: [
+        VariableDeclaration(VariableDeclaration { name: "PI", data_type: "float", value: Some(Literal(Float(3.14159))) }), 
+        FunctionDeclaration(FunctionDeclaration { name: "sum", parameters: [
+            VariableDeclaration { name: "a", data_type: "int", value: None }, 
+            VariableDeclaration { name: "b", data_type: "int", value: None }], 
+            return_type: "int", body: [ReturnStatement(
+                ReturnStatement { 
+                    value: Some(BinaryOperation(
+                        Variable("a"), Add, Variable("b"))) })] }), 
+                        FunctionDeclaration(
+                            FunctionDeclaration { 
+                                name: "main", parameters: [], 
+                                return_type: "void", 
+                                body: [VariableDeclaration(
+                                    VariableDeclaration { 
+                                        name: "a", 
+                                        data_type: "int", 
+                                        value: Some(Literal(Integer(5)))
+                                    }
+                                ), 
+                                VariableDeclaration(
+                                    VariableDeclaration { 
+                                        name: "b", data_type: "int", value: Some(Literal(Integer(10))) }), VariableDeclaration(VariableDeclaration { name: "result", data_type: "int", value: None }), VariableDeclaration(VariableDeclaration { name: "users", data_type: "list", value: Some(List([Dictionary([(Literal(String("username")), Literal(String("user1")))]), Dictionary([(Literal(String("username")), Literal(String("user2")))]), Dictionary([(Literal(String("username")), Literal(String("user3")))])])) }), IfStatement(IfStatement { condition: BinaryOperation(Variable("a"), NotEqual, Variable("b")), body: [Assignment(Assignment { name: "result", value: FunctionCall("sum", [Variable("a"), Variable("b")]) }), PrintStatement(PrintStatement { value: List([Variable("result")]) })], elif: Some(IfStatement { condition: BinaryOperation(Variable("a"), Equal, Variable("b")), body: [PrintStatement(PrintStatement { value: List([Literal(String("a и b равны"))]) })], elif: None, else_body: Some([Assignment(Assignment { name: "result", value: FunctionCall("sum", [Variable("a"), Literal(Integer(2))]) }), PrintStatement(PrintStatement { value: List([Variable("result")]) })]) }), else_body: None }), PrintStatement(PrintStatement { value: List([Variable("users")]) }), VariableDeclaration(VariableDeclaration { name: "ops", data_type: "int", value: Some(Literal(Integer(0))) }), ForInStatement("user", Variable("users"), [PrintStatement(PrintStatement { value: List([Variable("user")]) })]), VariableDeclaration(VariableDeclaration { name: "flag", data_type: "bool", value: Some(Literal(Boolean(true))) }), IfStatement(IfStatement { condition: BinaryOperation(Variable("flag"), And, BinaryOperation(Variable("ops"), GreaterThan, Literal(Integer(1)))), body: [PrintStatement(PrintStatement { value: List([Literal(String("Флаг установлен, и операций больше одного!"))]) })], elif: None, else_body: None }), VariableDeclaration(VariableDeclaration { name: "area", data_type: "float", value: Some(BinaryOperation(Variable("PI"), Multiply, BinaryOperation(Variable("a"), Multiply, Variable("a")))) }), PrintStatement(PrintStatement { value: List([Variable("area")]) }), VariableDeclaration(VariableDeclaration { name: "dictionary", data_type: "dict", value: Some(Dictionary([(Literal(String("key1")), Literal(String("value1"))), (Literal(String("key2")), Literal(String("value2")))])) }), PrintStatement(PrintStatement { value: List([Variable("dictionary")]) })] }), PrintStatement(PrintStatement { value: List([FunctionCall("main", [])]) })] })

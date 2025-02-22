@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use ordered_float::OrderedFloat;
+
+
 #[derive(Debug, Clone)]
 pub enum AstNode {
     Program { statements: Vec<Statement> },
@@ -18,7 +22,8 @@ pub enum Statement {
     ExpressionStatement(Expression),
     Block(Vec<Statement>),
     ForInStatement(String, Expression, Vec<Statement>),
-    TryHandleStatement(TryHandleStatement)
+    TryHandleStatement(TryHandleStatement),
+    FunctionCall(String, Vec<Expression>)
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +33,7 @@ pub enum Expression {
     BinaryOperation(Box<Expression>, Operator, Box<Expression>),
     FunctionCall(String, Vec<Expression>),
     List(Vec<Expression>),
-    Dictionary(Vec<(Expression, Expression)>),
+    Dictionary(HashMap<Literal, Expression>),
     Tuple(Vec<Expression>),
     Null,
     MemberAccess(Box<Expression>, String),
@@ -104,12 +109,15 @@ pub enum Operator {
     Or,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Literal {
     Integer(i64),
-    Float(f64),
+    Float(OrderedFloat<f64>),
     Boolean(bool),
     String(String),
+    List(Vec<Literal>),
+    Dictionary(Vec<(Literal, Literal)>),
+    Tuple(Vec<Literal>),
     Null,
 }
 
@@ -224,7 +232,7 @@ impl Expression {
         Expression::List(elements)
     }
 
-    pub fn dictionary(pairs: Vec<(Expression, Expression)>) -> Self {
+    pub fn dictionary(pairs: HashMap<Literal, Expression>) -> Self {
         Expression::Dictionary(pairs)
     }
 
