@@ -1,457 +1,1014 @@
 use ordered_float::OrderedFloat;
 use GiraffeAST::*;
-use std::collections::{self, HashMap};
+use std::collections::HashMap;
+use std::fmt::{self, format};
+
+pub struct LocalLiteral(pub GiraffeAST::Literal);
+
+impl fmt::Display for LocalLiteral {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            GiraffeAST::Literal::Null => write!(f, "null"),
+            GiraffeAST::Literal::Integer(i) => write!(f, "{}", i),
+            GiraffeAST::Literal::Float(fl) => write!(f, "{}", fl),
+            GiraffeAST::Literal::Boolean(b) => write!(f, "{}", b),
+            GiraffeAST::Literal::String(s) => write!(f, "{}", s),
+            GiraffeAST::Literal::List(lst) => {
+                let elements: Vec<String> = lst
+                    .iter()
+                    .map(|item| format!("{}", LocalLiteral(item.clone())))
+                    .collect();
+                write!(f, r#"["{}"]"#, elements.join(", "))
+            },
+            GiraffeAST::Literal::Dictionary(dict) => {
+                let elements: Vec<String> = dict
+                    .iter()
+                    .map(|(key, value_expr)| {
+                        let value_str = match value_expr {
+                            GiraffeAST::Expression::Literal(lit) => format!("{}", LocalLiteral(lit.clone())),
+                            _ => format!("{:?}", value_expr),
+                        };
+                        format!(r#""{}": "{}""#, LocalLiteral(key.clone()), value_str)
+                    })
+                    .collect();
+                write!(f, "{{{}}}", elements.join(", "))
+            },
+            GiraffeAST::Literal::Tuple(tpl) => {
+                let elements: Vec<String> = tpl
+                    .iter()
+                    .map(|item| format!("{}", LocalLiteral(item.clone())))
+                    .collect();
+                write!(f, "({})", elements.join(", "))
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum InterpreterError {
+    UndefinedVariable(String),
+    UndefinedFunction(String),
+    RuntimeError(String),
+    Break,              // Спец. сигнал для break
+    Continue,           // Спец. сигнал для continue
+    Return(Literal),    // Спец. сигнал для return
+
+    // TODO: Добавить другие виды ошибок (например, синтаксические, типовые и тд.)
+}
+
+#[derive(Debug)]
+pub enum InterpreterResult<T> {
+    Ok(T),
+    Err(InterpreterError),
+}
+
+pub trait StateStore: Clone {
+    fn set_variable(&mut self, name: &str, value: Literal);
+    fn get_variable(&self, name: &str) -> Option<Literal>;
+    fn set_function(&mut self, name: &str, function: Function);
+    fn get_function(&self, name: &str) -> Option<&Function>;
+    fn snapshot(&self) -> Self;
+}
 
 #[derive(Clone, Debug)]
-struct Context {
+pub struct Function {
+    pub params: Vec<String>,
+    pub body: Vec<Statement>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Context {
     variables: HashMap<String, Literal>,
-    functions: HashMap<String, FunctionDeclaration>,
+    functions: HashMap<String, Function>,
 }
 
 impl Context {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Context {
             variables: HashMap::new(),
             functions: HashMap::new(),
         }
     }
+}
 
-    fn set_variable(&mut self, name: String, value: Literal) {
-        self.variables.insert(name, value);
+impl StateStore for Context {
+    // Переменные
+    fn set_variable(&mut self, name: &str, value: Literal) {
+        self.variables.insert(name.to_string(), value);
     }
 
-    fn get_variable(&self, name: &str) -> Option<&Literal> {
-        self.variables.get(name)
+    fn get_variable(&self, name: &str) -> Option<Literal> {
+        self.variables.get(name).cloned()
     }
 
-    fn set_function(&mut self, name: String, func: FunctionDeclaration) {
-        self.functions.insert(name, func);
+    // Функции
+    fn set_function(&mut self, name: &str, function: Function) {
+        self.functions.insert(name.to_string(), function);
     }
 
-    fn get_function(&self, name: &str) -> Option<&FunctionDeclaration> {
+    fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
     }
+
+    fn snapshot(&self) -> Self {
+        self.clone() // Для простоты используем clone. В будущем сделать более эффективный механизм!
+    }
 }
 
-pub struct Interpreter {
-    pub global_context: Context,
-    pub call_stack: Vec<Context>, // стек локальных контекстов
+/// Интерпретатор, параметризованный типом хранилища состояния.
+/// Благодаря обобщённости можно в будущем использовать более умное хранилище или снапшоты.
+pub struct Interpreter<S: StateStore> {
+    global_state: S,
+    call_stack: Vec<S>,
+    break_signal: bool,
+    continue_signal: bool,
 }
 
-impl Interpreter {
-    pub fn new() -> Self {
+impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
+    pub fn new(global_state: S) -> Self {
         Interpreter {
-            global_context: Context::new(),
             call_stack: Vec::new(),
+            global_state,
+            break_signal: false,
+            continue_signal: false,
         }
     }
 
-    /// Возвращает текущий контекст – либо верхушку стека (если функция выполняется),
-    /// либо глобальный контекст, если стек пуст.
-    fn current_context(&mut self) -> &mut Context {
-        if let Some(ctx) = self.call_stack.last_mut() {
-            ctx
-        } else {
-            &mut self.global_context
-        }
-    }
-
-    pub fn evaluate_expression(&mut self, expr: Expression) -> Literal {
+    // Выполнение выражения
+    pub fn execute_expression(&mut self, expr: Expression) -> InterpreterResult<Literal> {
         match expr {
-            Expression::Variable(name) => {
-                // Сначала ищем в текущем контексте (если функция выполняется)
-                if let Some(value) = self.current_context().get_variable(&name) {
-                    value.clone()
-                } else if let Some(value) = self.global_context.get_variable(&name) {
-                    value.clone()
-                } else {
-                    println!("Error: Variable '{}' is not defined.", name);
-                    Literal::Null
-                }
+            Expression::Literal(literal) => InterpreterResult::Ok(literal),
+            Expression::Variable(name) => match self.global_state.get_variable(&name) {
+                Some(value) => InterpreterResult::Ok(value),
+                None => InterpreterResult::Err(InterpreterError::UndefinedVariable(name)),
             },
-            Expression::FunctionCall(name, args) => {
-                let evaluated_args: Vec<Literal> = args
-                    .into_iter()
-                    .map(|arg| self.evaluate_expression(arg))
-                    .collect();
-                self.call_function(name, evaluated_args)
-            },
-            Expression::BinaryOperation(left, op, right) => {
-                let left_val = self.evaluate_expression(*left);
-                let right_val = self.evaluate_expression(*right);
-                self.apply_operator(op, left_val, right_val)
-            },
-            Expression::List(elements) => {
-                let mut result = String::new();
-                for element in elements {
-                    let evaluated_value = self.evaluate_expression(element);
-                    match evaluated_value {
-                        Literal::String(s) => result.push_str(&s),
-                        Literal::Integer(i) => result.push_str(&i.to_string()),
-                        Literal::Float(f) => result.push_str(&f.to_string()),
-                        Literal::Boolean(b) => result.push_str(&b.to_string()),
-                        Literal::Null => result.push_str("null"),
-                        Literal::List(v) => result.push_str(&format!("[{}]", v.iter().map(|item| format!("{:?}", item)).collect::<Vec<String>>().join(", "))),
-                        Literal::Dictionary(d) => {
-                            result.push_str(&format!("{{{}}}", d.iter().map(|(k, v)| format!("{:?}: {:?}", k, v)).collect::<Vec<String>>().join(", ")))
-                        }
-                        Literal::Tuple(t) => result.push_str(&format!("({})", t.iter().map(|item| format!("{:?}", item)).collect::<Vec<String>>().join(", "))),
+            Expression::List(list) => {
+                let mut evaluated_list = Vec::new();
+                for item in list {
+                    match self.execute_expression(item) {
+                        InterpreterResult::Ok(value) => evaluated_list.push(value),
+                        InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                     }
                 }
-                Literal::String(result)
-            }            
-            Expression::Dictionary(elements) => {
-                let result = elements.into_iter()
-                .map(|(key, value)| {
-                    (self.evaluate_expression(GiraffeAST::Expression::Literal(key)), self.evaluate_expression(value))
-                })
-                .collect();
-                println!("evaluate_expression {:?}", result);
-                Literal::Dictionary(result)
+                InterpreterResult::Ok(Literal::List(evaluated_list))
             },
-            Expression::Tuple(elements) => {
-                let mut result = Vec::new();
-                for element in elements {
-                    let evaluated_value = self.evaluate_expression(element);
-                    result.push(evaluated_value);
+            Expression::BinaryOperation(left_expr, op, right_expr) => {
+                let left = match self.execute_expression(*left_expr) {
+                    InterpreterResult::Ok(val) => val,
+                    InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                };
+
+                let right = match self.execute_expression(*right_expr) {
+                    InterpreterResult::Ok(val) => val,
+                    InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                };
+
+                InterpreterBinaryOperation::execute(left, op, right)
+            },
+            Expression::Break => {
+                InterpreterResult::Err(InterpreterError::Break)
+            },
+            Expression::Continue => {
+                InterpreterResult::Err(InterpreterError::Continue)
+            },
+            Expression::Null => {
+                InterpreterResult::Ok(Literal::Null)
+            },
+            Expression::FunctionCall(func_name, func_arguments) => {
+                let mut evaluated_arguments = Vec::new();
+                for arg in func_arguments {
+                    match self.execute_expression(arg) {
+                        InterpreterResult::Ok(value) => evaluated_arguments.push(value),
+                        InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                    }
                 }
-                Literal::Tuple(result)
+
+                // println!("Call Stack: {:?}", self.call_stack);
+                // println!("Global State: {:?}", self.global_state);
+
+                match self.global_state.clone().get_function(&func_name) {
+                    Some(func) => {
+                        let mut local_context = self.global_state.snapshot();
+                        
+                        for (param, arg_value) in func.params.iter().zip(evaluated_arguments.into_iter()) {
+                            local_context.set_variable(param, arg_value);
+                        }
+                        
+                        let saved_state = self.global_state.snapshot();
+                        let func_body = self.global_state.get_function(&func_name).map(|f| f.body.clone()); 
+                        self.global_state = local_context;
+            
+                        let mut return_value: Option<Literal> = None;
+
+                        if let Some(stmt) = func_body {
+                            match self.execute_statement(GiraffeAST::Statement::Block(stmt)) {
+                            InterpreterResult::Ok(()) => {},
+                            InterpreterResult::Err(InterpreterError::Return(val)) => {
+                                return_value = Some(val);
+                            },
+                            InterpreterResult::Err(e) => {
+                                self.global_state = saved_state;
+                                return InterpreterResult::Err(e);
+                            }
+                            }
+                        }
+                        self.global_state = saved_state;
+                        match return_value {
+                            Some(value) => InterpreterResult::Ok(value),
+                            None => InterpreterResult::Ok(Literal::Null),
+                        }
+                        
+                    },
+                    None => InterpreterResult::Err(InterpreterError::UndefinedFunction(format!("in expression {}", func_name))),
+                }
             },
-            Expression::Literal(literal) => literal,
-            other => {
-                println!("Unhandled Expression variant: {:?}", other);
-                Literal::Null
-            }
+            Expression::Dictionary(dictionary_expression) => {
+                let mut evaluated_dictionary = Vec::new();
+                for (key, value) in dictionary_expression {
+                    let evaluated_key = match self.execute_expression(GiraffeAST::Expression::Literal(key)) {
+                        InterpreterResult::Ok(val) => val,
+                        InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                    };
+            
+                    let evaluated_value = match self.execute_expression(value) {
+                        InterpreterResult::Ok(val) => val,
+                        InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                    };
+            
+                    evaluated_dictionary.push((evaluated_key, Expression::Literal(evaluated_value)));
+                }
+                InterpreterResult::Ok(Literal::Dictionary(evaluated_dictionary))
+            },
+
+            // Сейчас нет нужды в MemberAccess
+            // Expression::MemberAccess(access, name) => {},
+            
+            Expression::MethodCall(access, name, args) => {
+                let object_literal = match self.execute_expression(*access) {
+                    InterpreterResult::Ok(val) => val,
+                    InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                };
+
+                let mut evaluated_arguments = Vec::new();
+                for arg in args {
+                    match self.execute_expression(arg) {
+                        InterpreterResult::Ok(val) => evaluated_arguments.push(val),
+                        InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                    }
+                }
+                
+                match object_literal {
+                    Literal::List(ref list) => {
+                        match name.as_str() {
+                            "append" => {
+                                if evaluated_arguments.len() != 1 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'append' ожидает один аргумент".into())
+                                    );
+                                }
+                                let mut new_list = list.clone();
+                                new_list.push(evaluated_arguments[0].clone());
+                                InterpreterResult::Ok(Literal::List(new_list))
+                            },
+                            "length" => {
+                                InterpreterResult::Ok(Literal::Integer(list.len() as i64))
+                            },
+                            "get" => {
+                                if evaluated_arguments.len() != 1 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'get' ожидает один аргумент".into())
+                                    );
+                                }
+                                let index = match &evaluated_arguments[0] {
+                                    Literal::Integer(i) => *i as usize,
+                                    _ => return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
+                                    ),
+                                };
+                                if index >= list.len() {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
+                                    );
+                                }
+                                InterpreterResult::Ok(list[index].clone())
+                            },
+                            "set" => {
+                                if evaluated_arguments.len() != 2 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'set' ожидает два аргумента".into())
+                                    );
+                                }
+                                let index = match &evaluated_arguments[0] {
+                                    Literal::Integer(i) => *i as usize,
+                                    _ => return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
+                                    ),
+                                };
+                                if index >= list.len() {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
+                                    );
+                                }
+                                let mut new_list = list.clone();
+                                new_list[index] = evaluated_arguments[1].clone();
+                                InterpreterResult::Ok(Literal::List(new_list))
+                            },
+                            "remove" => {
+                                if evaluated_arguments.len() != 1 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'remove' ожидает один аргумент".into())
+                                    );
+                                }
+                                let index = match &evaluated_arguments[0] {
+                                    Literal::Integer(i) => *i as usize,
+                                    _ => return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
+                                    ),
+                                };
+                                if index >= list.len() {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
+                                    );
+                                }
+                                let mut new_list = list.clone();
+                                new_list.remove(index);
+                                InterpreterResult::Ok(Literal::List(new_list))
+                            },
+                            _ => InterpreterResult::Err(
+                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для списка", name))
+                            ),
+                        }
+                    },
+                    Literal::Dictionary(ref dict) => {
+                        match name.as_str() {
+                            "keys" => {
+                                let keys = dict.iter().map(|(key, _)| key.clone()).collect();
+                                InterpreterResult::Ok(Literal::List(keys))
+                            },
+                            "values" => {
+                                let values = dict.iter().map(|(_, expr)| {
+                                    match expr {
+                                        Expression::Literal(lit) => lit.clone(),
+                                        _ => Literal::Null,
+                                    }
+                                }).collect();
+                                InterpreterResult::Ok(Literal::List(values))
+                            },
+                            "get" => {
+                                if evaluated_arguments.len() != 1 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'get' ожидает один аргумент".into())
+                                    );
+                                }
+                                let key = &evaluated_arguments[0];
+                                for (dict_key, dict_value) in dict {
+                                    if dict_key == key {
+                                        if let Expression::Literal(literal) = dict_value {
+                                            return InterpreterResult::Ok(literal.clone());
+                                        } else {
+                                            return InterpreterResult::Err(InterpreterError::RuntimeError("Dictionary value is not a literal".into()));
+                                        }                                        
+                                    }
+                                }
+                                InterpreterResult::Ok(Literal::Null)
+                            },
+                            "set" => {
+                                if evaluated_arguments.len() != 2 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'set' ожидает два аргумента".into())
+                                    );
+                                }
+                                let key = &evaluated_arguments[0];
+                                let value = &evaluated_arguments[1];
+                                let mut new_dict = dict.clone();
+                                if let Some((_, expr)) = new_dict.iter_mut().find(|(k, _)| k == key) {
+                                    *expr = Expression::Literal(value.clone());
+                                } else {
+                                    new_dict.push((key.clone(), Expression::Literal(value.clone())));
+                                }                                
+                                InterpreterResult::Ok(Literal::Dictionary(new_dict))
+                            },
+                            "remove" => {
+                                if evaluated_arguments.len() != 1 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'remove' ожидает один аргумент".into())
+                                    );
+                                }
+                                let key = &evaluated_arguments[0];
+                                let mut new_dict = dict.clone();
+                                new_dict.retain(|(k, _)| k != key);
+                                InterpreterResult::Ok(Literal::Dictionary(new_dict))
+                            },
+                            "length" => {
+                                InterpreterResult::Ok(Literal::Integer(dict.len() as i64))
+                            },
+                            _ => InterpreterResult::Err(
+                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для словаря", name))
+                            ),
+                        }
+                    },
+                    Literal::String(ref s) => {
+                        match name.as_str() {
+                            "length" => InterpreterResult::Ok(Literal::Integer(s.len() as i64)),
+                            "toUpperCase" => InterpreterResult::Ok(Literal::String(s.to_uppercase())),
+                            "toLowerCase" => InterpreterResult::Ok(Literal::String(s.to_lowercase())),
+                            "split" => {
+                                if evaluated_arguments.len() != 1 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'split' ожидает один аргумент".into())
+                                    );
+                                }
+                                let separator = match &evaluated_arguments[0] {
+                                    Literal::String(sep) => sep,
+                                    _ => return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Сепаратор должен быть строкой".into())
+                                    ),
+                                };
+                                let parts: Vec<Literal> = s.split(separator).map(|part| Literal::String(part.to_string())).collect();
+                                InterpreterResult::Ok(Literal::List(parts))
+                            },
+                            "replace" => {
+                                if evaluated_arguments.len() != 2 {
+                                    return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Метод 'replace' ожидает два аргумента".into())
+                                    );
+                                }
+                                let old = match &evaluated_arguments[0] {
+                                    Literal::String(sep) => sep,
+                                    _ => return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Старый сепаратор должен быть строкой".into())
+                                    ),
+                                };
+                                let new = match &evaluated_arguments[1] {
+                                    Literal::String(sep) => sep,
+                                    _ => return InterpreterResult::Err(
+                                        InterpreterError::RuntimeError("Новый сепаратор должен быть строкой".into())
+                                    ),
+                                };
+                                InterpreterResult::Ok(Literal::String(s.replace(old, new)))
+                            },
+                            _ => InterpreterResult::Err(
+                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для строки", name))
+                            ),
+                        }
+                    },
+                    Literal::Integer(num) => {
+                        match name.as_str() {
+                            "toString" => InterpreterResult::Ok(Literal::String(num.to_string())),
+                            _ => InterpreterResult::Err(
+                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для числа", name))
+                            ),
+                        }
+                    },
+                    Literal::Float(num) => {
+                        match name.as_str() {
+                            "toString" => InterpreterResult::Ok(Literal::String(num.to_string())),
+                            "toInt" => InterpreterResult::Ok(Literal::Integer(num.into_inner() as i64)),
+                            _ => InterpreterResult::Err(
+                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для числа", name))
+                            ),
+                        }
+                    },
+                    Literal::Boolean(_) => {
+                        match name.as_str() {
+                            "toString" => InterpreterResult::Ok(Literal::String(match object_literal {
+                                Literal::Boolean(true) => "true".to_string(),
+                                Literal::Boolean(false) => "false".to_string(),
+                                _ => unreachable!(),
+                            })),
+                            _ => InterpreterResult::Err(
+                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для логического значения", name))
+                            ),
+                        }
+                    },
+                    Literal::Null => {
+                        match name.as_str() {
+                            "toString" => InterpreterResult::Ok(Literal::String("null".to_string())),
+                            _ => InterpreterResult::Err(
+                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для null", name))
+                            ),
+                        }
+                    }
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Нельзя вызвать метод на типе: {:?}", object_literal))
+                    ),
+                }
+            },            
+            
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported expression: {:?}", expr))),
         }
     }
 
-    /// Функция: создание нового контекста, пуш в стек, выполнение тела и pop после завершения.
-    pub fn call_function(&mut self, name: String, args: Vec<Literal>) -> Literal {
-        if let Some(func_decl) = self.global_context.get_function(&name).cloned() {
-            // Создаём контекст для вызова функции и связываем параметры с аргументами
-            let mut func_context = Context::new();
-            for (param, arg) in func_decl.parameters.iter().zip(args.iter()) {
-                func_context.set_variable(param.name.clone(), arg.clone());
-            }
-            // Пушим контекст функции в стек вызовов
-            self.call_stack.push(func_context);
+    // Выполнение инструкций
+    pub fn execute_statement(&mut self, statement: Statement) -> InterpreterResult<()> {
+        match statement {
+            Statement::PrintStatement(print_statement) => {
+                let value = print_statement.value;
+                match self.execute_expression(value) {
+                    InterpreterResult::Ok(Literal::List(lst)) => {
+                        let mut output = String::new();
+                        for item in lst {
+                            if let Literal::String(s) = item {
+                                output.push_str(&s);
+                            }
+                            else {
+                                output.push_str(&LocalLiteral(item.clone()).to_string());
+                            }
+                        }
+                        println!("{}", output);
+                        InterpreterResult::Ok(())
+                    }
+                    InterpreterResult::Ok(result) => {
+                        println!("{:?}", result);
+                        InterpreterResult::Ok(())
+                    }
+                    InterpreterResult::Err(e) => {
+                        println!("Interpreter error: {:?}", e);
+                        InterpreterResult::Err(e)
+                    }
+                }
+            },
+            Statement::VariableDeclaration(var_decl) => {
+                let var_name = var_decl.name;
+                let var_value = var_decl.value;
 
-            let mut return_value = Literal::Null;
-            for statement in func_decl.body {
-                match statement {
-                    Statement::ReturnStatement(return_stmt) => {
-                        if let Some(return_expr) = return_stmt.value {
-                            return_value = self.evaluate_expression(return_expr);
+                match self.execute_expression(var_value.expect(&format!("Variable value should not be None {}", var_name))) {
+                    InterpreterResult::Ok(value) => {
+                        self.global_state.set_variable(&var_name, value);
+                        InterpreterResult::Ok(())
+                    }
+                    InterpreterResult::Err(e) => InterpreterResult::Err(e),
+                }                
+            },
+            Statement::FunctionCall(name, args) => {
+                if let Some(func) = self.global_state.get_function(&name) {
+                    let func = func.clone();
+    
+                    let local_state = self.global_state.snapshot();
+                    let mut local_context = Context::new();
+                    
+                    for stmt in func.body.clone() {
+                        match self.execute_statement(stmt.clone()) {
+                            InterpreterResult::Ok(_) => {}
+                            InterpreterResult::Err(e) => {
+                                println!("Error in function '{}': {:?}", name, e);
+                                return InterpreterResult::Err(e);
+                            }
+                        }
+                    }
+                    
+                    for (param, arg) in func.params.iter().zip(args.iter()) {
+                        if let InterpreterResult::Ok(value) = self.execute_expression(arg.clone()) {
+                            local_context.set_variable(&param.clone(), value.clone());
+                        }
+                    }
+    
+                    for (var_name, var_value) in local_context.variables {
+                        self.global_state.set_variable(&var_name, var_value);
+                    }
+    
+                    self.global_state = local_state;
+                    InterpreterResult::Ok(())
+                } 
+                else {
+                    InterpreterResult::Err(InterpreterError::UndefinedFunction(name))
+                }
+            },
+
+            Statement::IfStatement(if_stmt) => {
+                let condition_result = self.execute_expression(if_stmt.condition);
+                match condition_result {
+                    InterpreterResult::Ok(Literal::Boolean(true)) => {
+                        for stmt in &if_stmt.body {
+                            match self.execute_statement(stmt.clone()) {
+                                InterpreterResult::Ok(()) => {},
+                                InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                            }
+                        }
+                        return InterpreterResult::Ok(());
+                    },
+                    InterpreterResult::Ok(Literal::Boolean(false)) => {
+                        if let Some(elif) = if_stmt.elif {
+                            match self.execute_statement(Statement::IfStatement(*elif)) {
+                                InterpreterResult::Ok(()) => {},
+                                InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                            }
+                        } else if let Some(else_body) = if_stmt.else_body {
+                            for stmt in else_body {
+                                match self.execute_statement(stmt) {
+                                    InterpreterResult::Ok(()) => {},
+                                    InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                                }
+                            }
+                        }
+                        return InterpreterResult::Ok(());
+                    },
+                    InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                    _ => return InterpreterResult::Err(InterpreterError::RuntimeError("Condition must evaluate to boolean".into())),
+                }
+            },
+            Statement::Assignment(assignment_statement) => {
+                let name = assignment_statement.name;
+                let value = assignment_statement.value;
+                match self.execute_expression(value) {
+                    InterpreterResult::Ok(value) => {
+                        self.global_state.set_variable(&name, value);
+                        InterpreterResult::Ok(())
+                    }
+                    InterpreterResult::Err(e) => InterpreterResult::Err(e),
+                }
+            },
+            Statement::WhileStatement(while_statement) => {
+                let mut condition = self.execute_expression(while_statement.condition.clone());
+                while let InterpreterResult::Ok(Literal::Boolean(true)) = condition {
+                    for stmt in &while_statement.body {
+                        match self.execute_statement(stmt.clone()) {
+                            InterpreterResult::Ok(()) => {},
+                            InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                        }
+
+                        if self.is_break_signal() {
+                            return InterpreterResult::Ok(());
+                        } else if self.is_continue_signal() {
                             break;
                         }
                     }
-                    _ => {
-                        self.execute_statement(statement);
-                    }
+                    condition = self.execute_expression(while_statement.condition.clone());
                 }
-            }
-            // По завершении функции удаляем контекст из стека
-            self.call_stack.pop();
-            return_value
-        } else {
-            println!("Error: Function '{}' is not defined.", name);
-            Literal::Null
-        }
-    }
+                InterpreterResult::Ok(())
+            },
 
-    pub fn apply_operator(&self, op: Operator, left: Literal, right: Literal) -> Literal {
-        match op {
-            Operator::Add => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Integer(l + r),
-                (Literal::Integer(l), Literal::Float(r)) => Literal::Float(OrderedFloat::from(l as f64 + *r)),
-                (Literal::Float(l), Literal::Integer(r)) => Literal::Float(l + r as f64),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Float(l + r),
-                (Literal::String(mut l), Literal::String(r)) => {
-                    l.push_str(&r);
-                    Literal::String(l)
-                },
-                (Literal::Integer(l), Literal::String(r)) => {
-                    let result = l.to_string() + &r;
-                    Literal::String(result)
-                },
-                (Literal::String(l), Literal::Integer(r)) => {
-                    let result = l + &r.to_string();
-                    Literal::String(result)
-                },
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '+' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
+            Statement::ForInStatement(loop_var, collection, body) => {
+                match self.execute_expression(collection) {
+                    InterpreterResult::Ok(Literal::List(list)) => {
+                        for item in list {
+                            self.global_state.set_variable(&loop_var, item.clone());
+                            for stmt in &body {
+                                match self.execute_statement(stmt.clone()) {
+                                    InterpreterResult::Ok(_) => {},
+                                    InterpreterResult::Err(e) => {
+                                        if self.is_break_signal() {
+                                            self.reset_signals();
+                                            return InterpreterResult::Ok(());
+                                        } else if self.is_continue_signal() {
+                                            self.reset_signals();
+                                            break;
+                                        } else {
+                                            return InterpreterResult::Err(e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    InterpreterResult::Ok(Literal::String(s)) => {
+                        let char_list: Vec<Literal> = s.chars()
+                            .map(|c| Literal::String(c.to_string()))
+                            .collect();
+                        for item in char_list {
+                            self.global_state.set_variable(&loop_var, item.clone());
+                            for stmt in &body {
+                                match self.execute_statement(stmt.clone()) {
+                                    InterpreterResult::Ok(_) => {},
+                                    InterpreterResult::Err(e) => {
+                                        if self.is_break_signal() {
+                                            self.reset_signals();
+                                            return InterpreterResult::Ok(());
+                                        } else if self.is_continue_signal() {
+                                            self.reset_signals();
+                                            break;
+                                        } else {
+                                            return InterpreterResult::Err(e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    InterpreterResult::Ok(Literal::Dictionary(dict)) => {
+                        for (key, value_expr) in dict {
+                            let value = match value_expr {
+                                Expression::Literal(lit) => lit.clone(),
+                                _ => match self.execute_expression(value_expr) {
+                                    InterpreterResult::Ok(val) => val,
+                                    InterpreterResult::Err(e) => return InterpreterResult::Err(e),
+                                },
+                            };
+                            let pair = Literal::Tuple(vec![key.clone(), value]);
+                            self.global_state.set_variable(&loop_var, pair);
+                            for stmt in &body {
+                                match self.execute_statement(stmt.clone()) {
+                                    InterpreterResult::Ok(_) => {},
+                                    InterpreterResult::Err(e) => {
+                                        if self.is_break_signal() {
+                                            self.reset_signals();
+                                            return InterpreterResult::Ok(());
+                                        } else if self.is_continue_signal() {
+                                            self.reset_signals();
+                                            break;
+                                        } else {
+                                            return InterpreterResult::Err(e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    InterpreterResult::Ok(_) => {
+                        return InterpreterResult::Err(
+                            InterpreterError::RuntimeError("Collection must be a list, string, or dictionary".into())
+                        )
+                    },
+                    InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                 }
+                InterpreterResult::Ok(())
             },
-            Operator::Subtract => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Integer(l - r),
-                (Literal::Integer(l), Literal::Float(r)) => Literal::Float(OrderedFloat::from(l as f64 - *r)),
-                (Literal::Float(l), Literal::Integer(r)) => Literal::Float(l - r as f64),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Float(l - r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '-' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::Multiply => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Integer(l * r),
-                (Literal::Integer(l), Literal::Float(r)) => Literal::Float(OrderedFloat::from(l as f64 * *r)),
-                (Literal::Float(l), Literal::Integer(r)) => Literal::Float(l * r as f64),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Float(l * r),
-                (Literal::String(l), Literal::Integer(r)) => {
-                    let mut result = String::new();
-                    for _ in 0..r {
-                        result.push_str(&l);
-                    }
-                    Literal::String(result)
-                },
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '*' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::Divide => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Integer(l / r),
-                (Literal::Integer(l), Literal::Float(r)) => Literal::Float(OrderedFloat(l as f64 / *r)),
-                (Literal::Float(l), Literal::Integer(r)) => Literal::Float(l / r as f64),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Float(l / r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '/' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::GreaterThan => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Boolean(l > r),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Boolean(l > r),
-                (Literal::String(l), Literal::String(r)) => Literal::Boolean(l > r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '>' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::LessThan => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Boolean(l < r),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Boolean(l < r),
-                (Literal::String(l), Literal::String(r)) => Literal::Boolean(l < r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '<' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::And => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Boolean(l), Literal::Boolean(r)) => Literal::Boolean(l && r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator 'and' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::Or => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Boolean(l), Literal::Boolean(r)) => Literal::Boolean(l || r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator 'or' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::Equal => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Boolean(l == r),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Boolean(l == r),
-                (Literal::String(l), Literal::String(r)) => Literal::Boolean(l == r),
-                (Literal::Boolean(l), Literal::Boolean(r)) => Literal::Boolean(l == r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '==' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            Operator::NotEqual => match (left.clone(), right.clone()) {
-                (Literal::Null, _) | (_, Literal::Null) => Literal::Null,
-                (Literal::Integer(l), Literal::Integer(r)) => Literal::Boolean(l != r),
-                (Literal::Float(l), Literal::Float(r)) => Literal::Boolean(l != r),
-                (Literal::String(l), Literal::String(r)) => Literal::Boolean(l != r),
-                (Literal::Boolean(l), Literal::Boolean(r)) => Literal::Boolean(l != r),
-                _ => {
-                    println!(
-                        "Error: Unsupported types for operator '!=' (left: {:?}, right: {:?})",
-                        left, right
-                    );
-                    Literal::Null
-                }
-            },
-            _ => {
-                println!("Unhandled Operator variant: {:?}", op);
-                Literal::Null
-            }
-        }
-    }
 
-    pub fn execute_statement(&mut self, stmt: Statement) -> Literal {
-        // println!("execute_statement {:?}", stmt);
-        match stmt {
-            Statement::FunctionDeclaration(func_decl) => {
-                // Функция регистрируется в текущем (или глобальном) контексте
-                self.current_context().set_function(func_decl.name.clone(), func_decl);
-                Literal::Null
-            }
-            Statement::VariableDeclaration(var_decl) => {
-                let value = if let Some(expr) = var_decl.value {
-                    self.evaluate_expression(expr)
-                } else {
-                    Literal::Null
+            Statement::ReturnStatement(return_statement) => {
+                let value_expr = return_statement.value.expect("Return statement must have a value");
+                match self.execute_expression(value_expr) {
+                    InterpreterResult::Ok(val) => InterpreterResult::Err(InterpreterError::Return(val)),
+                    InterpreterResult::Err(e) => InterpreterResult::Err(e),
+                }
+            },            
+            
+            Statement::TryHandleStatement(try_handle_statement) => {
+                let try_body = try_handle_statement.try_body;
+                let handle_body = try_handle_statement.handle_body;
+                let error_body = try_handle_statement.finally_body;
+
+                let result = {
+                    let mut execution_result = InterpreterResult::Ok(());
+                    for stmt in handle_body {
+                        let _ = self.execute_statement(stmt.clone());
+                    }
+                    
+                    for stmt in try_body {
+                        execution_result = self.execute_statement(stmt.clone());
+                        if let InterpreterResult::Err(_) = &execution_result {
+                            break;
+                        }
+                    }
+                    execution_result
                 };
-                self.current_context().set_variable(var_decl.name.clone(), value);
-                Literal::Null
-            }
-            Statement::IfStatement(if_stmt) => {
-                let condition_value = self.evaluate_expression(if_stmt.condition);
-                if self.is_truthy(condition_value) {
-                    for statement in if_stmt.body {
-                        self.execute_statement(statement);
+
+                match result {
+                    InterpreterResult::Err(e) => {
+                        if let Some(finally_statements) = error_body {
+                            for stmt in finally_statements {
+                                let _ = self.execute_statement(stmt.clone());
+                            }
+                        }
+                        InterpreterResult::Err(e)
                     }
-                } else if let Some(else_body) = if_stmt.else_body {
-                    for statement in else_body {
-                        self.execute_statement(statement);
-                    }
-                }
-                Literal::Null
-            }
-            Statement::WhileStatement(while_stmt) => {
-                let condition = while_stmt.condition.clone();
-                let value = self.evaluate_expression(condition);
-                while self.is_truthy(value.clone()) {
-                    for statement in while_stmt.body.clone() {
-                        self.execute_statement(statement);
+                    InterpreterResult::Ok(_) => {
+                        if let Some(finally_statements) = error_body {
+                            for stmt in finally_statements {
+                                let _ = self.execute_statement(stmt.clone());
+                            }
+                        }
+                        result
                     }
                 }
-                Literal::Null
-            }
-            Statement::PrintStatement(print_stmt) => {
-                let value = self.evaluate_expression(print_stmt.value);
-                // println!("Call stack: {:?}", self.call_stack.clone());
-                // println!("Current context: {:?}", self.current_context().clone());
-                println!("{:?}", value);
-                Literal::Null
-            }
-            Statement::ReturnStatement(return_stmt) => {
-                if let Some(expr) = return_stmt.value {
-                    return self.evaluate_expression(expr);
+            },
+            Statement::Block(block_statements) => {
+                let mut block_result = InterpreterResult::Ok(());
+                for stmt in block_statements {
+                    block_result = self.execute_statement(stmt.clone());
+                    if let InterpreterResult::Err(_) = &block_result {
+                        break;
+                    }
                 }
-                Literal::Null
+                block_result
+            },
+            Statement::FunctionDeclaration(func_decl) => {
+                self.global_state.set_function(
+                    &func_decl.name,
+                    Function {
+                        params: func_decl.parameters.iter().map(|param| param.name.clone()).collect(),
+                        body: func_decl.body.clone(),
+                    },
+                );
+                InterpreterResult::Ok(())
+            },    
+            Statement::ExpressionStatement(expression_statement) => {
+                let _ = self.execute_expression(expression_statement);
+                InterpreterResult::Ok(())
             }
-            Statement::Assignment(assign) => {
-                let value = self.evaluate_expression(assign.value);
-                // Сначала пытаемся обновить в текущем контексте,
-                // если переменная не найдена – пробуем в глобальном
-                if self.current_context().get_variable(&assign.name).is_some() {
-                    self.current_context().set_variable(assign.name, value);
-                } else if self.global_context.get_variable(&assign.name).is_some() {
-                    self.global_context.set_variable(assign.name, value);
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported statement {:?}", statement))),
+        }
+    }    
+    
+    pub fn set_break_signal(&mut self) {
+        self.break_signal = true;
+    }
+
+    pub fn set_continue_signal(&mut self) {
+        self.continue_signal = true;
+    }
+
+    pub fn is_break_signal(&self) -> bool {
+        self.break_signal
+    }
+
+    pub fn is_continue_signal(&self) -> bool {
+        self.continue_signal
+    }
+
+    pub fn reset_signals(&mut self) {
+        self.break_signal = false;
+        self.continue_signal = false;
+    }
+}
+
+
+pub struct InterpreterBinaryOperation;
+
+impl InterpreterBinaryOperation {
+    pub fn execute(left: Literal, operator: Operator, right: Literal) -> InterpreterResult<Literal> {
+        match operator {
+            Operator::Add => InterpreterBinaryOperation::add(left, right),
+            Operator::Subtract => InterpreterBinaryOperation::subtract(left, right),
+            Operator::Multiply => InterpreterBinaryOperation::multiply(left, right),
+            Operator::Divide => InterpreterBinaryOperation::divide(left, right),
+            Operator::GreaterThan => InterpreterBinaryOperation::greater_than(left, right),
+            Operator::LessThan => InterpreterBinaryOperation::less_than(left, right),
+            Operator::Equal => InterpreterBinaryOperation::equal(left, right),
+            Operator::NotEqual => InterpreterBinaryOperation::not_equal(left, right),
+            Operator::And => InterpreterBinaryOperation::and(left, right),
+            Operator::Or => InterpreterBinaryOperation::or(left, right),
+            Operator::GreaterThanOrEqual => InterpreterBinaryOperation::greater_than_or_equal(left, right),
+            Operator::LessThanOrEqual => InterpreterBinaryOperation::less_than_or_equal(left, right),
+        }
+    }
+    
+    fn add(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Integer(l + r)),
+            (Literal::Float(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 + r.0))),
+            (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l as f64 + r.0))),
+            (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 + r as f64))),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported addition types: {:?} + {:?}", left, right))),
+        }
+    }
+
+    fn subtract(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Integer(l - r)),
+            (Literal::Float(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 - r.0))),
+            (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l as f64 - r.0))),
+            (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 - r as f64))),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported subtraction types: {:?} - {:?}", left, right))),
+        }
+    }
+
+    fn multiply(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Integer(l * r)),
+            (Literal::Float(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 * r.0))),
+            (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l as f64 * r.0))),
+            (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 * r as f64))),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported multiplication types: {:?} * {:?}", left, right))),
+        }
+    }
+
+    fn divide(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => {
+                if r == 0 {
+                    InterpreterResult::Err(InterpreterError::RuntimeError("Division by zero".into()))
                 } else {
-                    println!("Error: Variable '{}' is not defined.", assign.name);
+                    InterpreterResult::Ok(Literal::Integer(l / r))
                 }
-                Literal::Null
             }
-            Statement::ExpressionStatement(expr) => {
-                self.evaluate_expression(expr);
-                Literal::Null
-            }
-            Statement::ForInStatement(loop_var, collection , body) => {
-                let collection_value = self.evaluate_expression(collection);
-                println!("Collection Value: {:?}", collection_value);
-                match collection_value {
-                    Literal::String(s) => {
-                        println!("String in For-In");
-                        for char in s.chars() {
-                            self.current_context().set_variable(loop_var.clone(), Literal::String(char.to_string()));
-                            for statement in body.clone() {
-                                self.execute_statement(statement);
-                            }
-                        }
-                    }
-                    Literal::List(l) => {
-                        println!("List in For-In");
-                        for item in l {
-                            self.current_context().set_variable(loop_var.clone(), item);
-                            for statement in body.clone() {
-                                self.execute_statement(statement);
-                            }
-                        }
-                    }
-                    Literal::Dictionary(d) => {
-                        println!("Dictionary in For-In");
-                        for (key, value) in d {
-                            self.current_context().set_variable(loop_var.clone(), value);
-                            for statement in body.clone() {
-                                self.execute_statement(statement);
-                            }
-                        }
-                    }
-                    _ => {
-                        println!("Error: Cannot iterate over non-string and non-list values.");
-                    }
+            (Literal::Float(l), Literal::Float(r)) => {
+                if r.0 == 0.0 {
+                    InterpreterResult::Err(InterpreterError::RuntimeError("Division by zero".into()))
+                } else {
+                    InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 / r.0)))
                 }
-                Literal::Null
             }
-            _ => {
-                println!("Unhandled Statement variant: {:?}", stmt);
-                Literal::Null
+            (Literal::Integer(l), Literal::Float(r)) => {
+                if r.0 == 0.0 {
+                    InterpreterResult::Err(InterpreterError::RuntimeError("Division by zero".into()))
+                } else {
+                    InterpreterResult::Ok(Literal::Float(OrderedFloat(l as f64 / r.0)))
+                }
+            }
+            (Literal::Float(l), Literal::Integer(r)) => {
+                if r == 0 {
+                    InterpreterResult::Err(InterpreterError::RuntimeError("Division by zero".into()))
+                } else {
+                    InterpreterResult::Ok(Literal::Float(OrderedFloat(l.0 / r as f64)))
+                }
+            }
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported division types: {:?} / {:?}", left, right))),
+        }
+    }
+
+    fn greater_than(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l > r)),
+            (Literal::Float(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 > r.0)),
+            (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l as f64 > r.0)),
+            (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 > r as f64)),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported greater than types: {:?} > {:?}", left, right))),
+        }
+    }
+
+    fn less_than(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l < r)),
+            (Literal::Float(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 < r.0)),
+            (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean((l as f64) < r.0)),
+            (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 < r as f64)),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported less than types: {:?} < {:?}", left, right))),
+        }
+    }
+
+    fn equal(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        InterpreterResult::Ok(Literal::Boolean(left == right))
+    }
+
+    fn not_equal(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        InterpreterResult::Ok(Literal::Boolean(left != right))
+    }
+
+    fn and(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Boolean(l), Literal::Boolean(r)) => InterpreterResult::Ok(Literal::Boolean(l && r)),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported AND operation types: {:?} && {:?}", left, right))),
+        }
+    }
+
+    fn or(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Boolean(l), Literal::Boolean(r)) => InterpreterResult::Ok(Literal::Boolean(l || r)),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported OR operation types: {:?} || {:?}", left, right))),
+        }
+    }
+
+    fn greater_than_or_equal(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l >= r)),
+            (Literal::Float(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 >= r.0)),
+            (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l as f64 >= r.0)),
+            (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 >= r as f64)),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported greater than or equal types: {:?} >= {:?}", left, right))),
+        }
+    }
+
+    fn less_than_or_equal(left: Literal, right: Literal) -> InterpreterResult<Literal> {
+        match (left.clone(), right.clone()) {
+            (Literal::Integer(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l <= r)),
+            (Literal::Float(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 <= r.0)),
+            (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l as f64 <= r.0)),
+            (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 <= r as f64)),
+            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported less than or equal types: {:?} <= {:?}", left, right))),
+        }
+    }
+}
+
+
+pub fn interpret(ast_node: AstNode) {
+    let mut global_state = Context::new();
+
+    if let AstNode::Program { statements } = &ast_node {
+        for statement in statements {
+            if let Statement::FunctionDeclaration(func_decl) = statement {
+                global_state.set_function(&func_decl.name, Function {
+                    params: func_decl.parameters.iter().map(|p| p.name.clone()).collect(),
+                    body: func_decl.body.clone(),
+                });
+                // println!("Registered function: {}", func_decl.name);
             }
         }
     }
 
-    fn is_truthy(&self, value: Literal) -> bool {
-        match value {
-            Literal::Boolean(b) => b,
-            Literal::Null => false,
-            _ => true,
+    let mut interpreter = Interpreter::new(global_state.clone());
+
+    if let AstNode::Program { statements } = ast_node {
+        for statement in statements {
+            if !matches!(statement, Statement::FunctionDeclaration(_)) {
+                match interpreter.execute_statement(statement.clone()) {
+                    InterpreterResult::Ok(_) => {}
+                    InterpreterResult::Err(e) => {
+                        println!("Runtime error: {:?}", e);
+                    }
+                }
+            }
         }
     }
 
-    pub fn interpret_program(&mut self, node: AstNode) -> Literal {
-        match node {
-            AstNode::Program { statements } => {
-                let mut result = Literal::Null;
-                for statement in statements {
-                    result = self.execute_statement(statement);
+    if let Some(main_func) = global_state.get_function("main") {
+        // println!("Executing 'main' function...");
+        for statement in &main_func.body {
+            match interpreter.execute_statement(statement.clone()) {
+                InterpreterResult::Ok(_) => {}
+                InterpreterResult::Err(e) => {
+                    println!("Runtime error in main: {:?}", e);
                 }
-                result
             }
-            AstNode::Statement(statement) => self.execute_statement(statement),
-            AstNode::Expression(expression) => self.evaluate_expression(expression),
         }
     }
 }

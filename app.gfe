@@ -20,32 +20,32 @@ func sum(a: int, b: int): int {
 func main(){
     var a: int = 5
     var b: int = 10
-    var result: int
+    var result: int = 0
     var users = [{"username": "user1"}, {"username": "user2"}, {"username": "user3"}]  // Список пользователей
     
     // Использование оператора сравнения
     if (a > b) {
         result = sum(a, b)
-        print!(result.to_str())  // Выводит сумму чисел
+        print!(result)  // Выводит сумму чисел
     }
     elif (a == b) {
         print!("a и b равны")
     }
     else {
         result = sum(a, 2)
-        print!(result.to_str())  // Выводит сумму a и 2
+        print!(result)  // Выводит сумму a и 2
     }
     
     // Пример работы с while
     var ops: int = 0
     while (ops < 3) {
         ops = ops + 1
-        print!(ops.to_str())  // Печатает количество операций
+        print!(ops)  // Печатает количество операций
     }
     
     // Пример работы с for
     for (user in users) {
-        print!(user.to_str())  // Выводит {"username": "user1"}, {"username": "user2"}, {"username": "user3"}
+        print!(user)  // Выводит {"username": "user1"}, {"username": "user2"}, {"username": "user3"}
     }
 
     // Пример работы с операторами логического И и ИЛИ
@@ -56,11 +56,11 @@ func main(){
 
     // Пример использования типа данных float и операторов
     var area: float = PI * (a * a)
-    print!(area.to_str())  // Выводит площадь круга с радиусом a
+    print!(area)  // Выводит площадь круга с радиусом a
 
     // Пример работы с комплексными типами данных
     var dictionary = {"key1": "value1", "key2": "value2"}
-    print!(dictionary.to_str())  // Выводит словарь
+    print!(dictionary)  // Выводит словарь
 
     // Пример работы с try/handle
     try {

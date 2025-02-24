@@ -1,7 +1,14 @@
 use GiraffeLexer::Lexer;
 
 fn main() {
-    let code = r#"const PI: float = 3.14"#;
+    let code = r#"
+    const PI: float = 3.14
+    var radius: int = 5
+    if (PI && radius > 0) {
+        var area: float = PI * radius * radius
+        print!("Area of the circle: " + area)
+    }
+    "#;
 
     let lexer = Lexer::new();
     match lexer.tokenize(code) {

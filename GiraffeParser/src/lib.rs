@@ -179,7 +179,7 @@ impl Parser {
         let try_body = self.parse_block()?;
         
         self.expect(TokenType::KEYWORD, Some("handle"))?;
-        let catch_body = self.parse_block()?;
+        let handle_body = self.parse_block()?;
         
         let finally_body = if self.check(TokenType::KEYWORD, Some("finally")) {
             self.advance();
@@ -190,7 +190,7 @@ impl Parser {
         
         Ok(Statement::try_handle_statement(TryHandleStatement {
             try_body,
-            catch_body,
+            handle_body,
             finally_body,
         }))
     }
@@ -486,12 +486,16 @@ impl Parser {
         self.expect(TokenType::BRACKET, Some("{"))?;
         let mut statements = Vec::new();
         while !self.check(TokenType::BRACKET, Some("}")) && !self.is_at_end() {
+            self.skip_comments();
+            if self.check(TokenType::BRACKET, Some("}")) {
+                break;
+            }
             let stmt = self.parse_statement()?;
             statements.push(stmt);
         }
         self.expect(TokenType::BRACKET, Some("}"))?;
         Ok(statements)
-    }
+    }    
 
     // =========================================================================
     // Функции разбора выражений с учётом приоритетов операторов.
@@ -541,17 +545,19 @@ impl Parser {
 
     fn parse_comparison(&mut self) -> Result<Expression, String> {
         let mut expr = self.parse_term()?;
-        while self.check_operator(">") || self.check_operator("<") {
-            let op_token = self.current().clone();
-            let op = match op_token.value.as_str() {
-                ">" => Operator::greater_than(),
-                "<" => Operator::less_than(),
-                _ => return Err(format!("Неизвестный оператор сравнения: {}", op_token.value)),
-            };
-            self.advance();
-            let right = self.parse_term()?;
-            expr = Expression::binary_operation(expr, op, right);
-        }
+        while self.check_operator(">") || self.check_operator("<") || self.check_operator(">=") || self.check_operator("<=") {
+        let op_token = self.current().clone();
+        let op = match op_token.value.as_str() {
+            ">"  => Operator::greater_than(),
+            "<"  => Operator::less_than(),
+            ">=" => Operator::greater_than_or_equal(),
+            "<=" => Operator::less_than_or_equal(),
+            _ => return Err(format!("Неизвестный оператор сравнения: {}", op_token.value)),
+        };
+        self.advance();
+        let right = self.parse_term()?;
+        expr = Expression::binary_operation(expr, op, right);
+    }  
         Ok(expr)
     }
 
@@ -684,12 +690,10 @@ impl Parser {
     fn parse_postfix(&mut self, mut expr: Expression) -> Result<Expression, String> {
         loop {
             if self.check_operator(".") {
-                self.advance(); // пропускаем точку
-                // Ожидаем идентификатор после точки (название метода или свойства)
+                self.advance();
                 let member_token = self.expect(TokenType::IDENTIFIER, None)?;
                 let member_name = member_token.value;
                 
-                // Если сразу после идентификатора следует открывающая скобка, это вызов метода
                 if self.check(TokenType::BRACKET, Some("(")) {
                     self.advance(); // пропускаем '('
                     let mut args = Vec::new();
@@ -706,10 +710,11 @@ impl Parser {
                     }
                     self.expect(TokenType::BRACKET, Some(")"))?;
                     expr = Expression::MethodCall(Box::new(expr), member_name, args);
-                } else {
-                    // Если скобок нет – это доступ к полю
-                    expr = Expression::MemberAccess(Box::new(expr), member_name);
-                }
+                } 
+                // Сейчас нет нужды в MemberAccess
+                // else {
+                //     expr = Expression::MemberAccess(Box::new(expr), member_name);
+                // }
             } else {
                 break;
             }
@@ -739,7 +744,7 @@ impl Parser {
     /// Разбирает литерал словаря: { key1: value1, key2: value2, … }
     fn parse_dictionary(&mut self) -> Result<Expression, String> {
         self.expect(TokenType::BRACKET, Some("{"))?;
-        let mut pairs = HashMap::new();
+        let mut pairs = Vec::new();
         if !self.check(TokenType::BRACKET, Some("}")) {
             loop {
                 let key = match self.parse_expression()? {
@@ -748,7 +753,7 @@ impl Parser {
                 };
                 self.expect(TokenType::PUNCTUATION, Some(":"))?;
                 let value = self.parse_expression()?;
-                pairs.insert(key, value);
+                pairs.push((key, value));
                 if self.check(TokenType::PUNCTUATION, Some(",")) {
                     self.advance();
                 } else {
@@ -758,7 +763,7 @@ impl Parser {
         }
         self.expect(TokenType::BRACKET, Some("}"))?;
         Ok(Expression::Dictionary(pairs))
-    }
+    }    
 
     // =========================================================================
     // Вспомогательные функции для проверки операторов и ключевых слов

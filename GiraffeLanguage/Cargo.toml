@@ -1,0 +1,10 @@
+[package]
+name = "GiraffeLanguage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+GiraffeInterpreter ={ path = "../GiraffeInterpreter"}
+GiraffeLexer = { path = "../GiraffeLexer" }
+GiraffeAST = { path = "../GiraffeAST"}
+GiraffeParser ={ path = "../GiraffeParser"}

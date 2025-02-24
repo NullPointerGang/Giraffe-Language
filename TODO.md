@@ -15,28 +15,28 @@
   - [x] Циклы (`WhileStatement`) *(пока без поддержки сравнений)*
   - [x] Вывод (`PrintStatement`)
   - [x] Присваивание (`Assignment`)
-  - [ ] `ForInStatement` (цикл for-each)
-  - [ ] `TryHandleStatement` (try-catch-finally)
+  - [x] `ForInStatement` (цикл for-each)
+  - [x] `TryHandleStatement` (try-catch-finally)
   - [x] `ReturnStatement` (возврат значений из функций)
-  - [ ] `Break/Continue` (выход из цикла)
+  - [x] `Break/Continue` (выход из цикла)
 
 - [x] **Обработка выражений** (`Expression`)
   - [x] Литералы (`Literal`)
   - [x] Переменные (`Variable`)
   - [x] Вызов функций (`FunctionCall`)
-  - [ ] Список (`List`)
-  - [ ] Словарь (`Dictionary`)
-  - [ ] Кортеж (`Tuple`)
-  - [ ] Доступ к полям (`MemberAccess`)
-  - [ ] Вызов методов (`MethodCall`)
+  - [x] Список (`List`)
+  - [x] Словарь (`Dictionary`)
+  - [x] Кортеж (`Tuple`)
+  - [?] Доступ к полям (`MemberAccess`)
+  - [x] Вызов методов (`MethodCall`)
 
 - [x] **Обработка бинарных операций** (`BinaryOperation`)
   - [x] Арифметика (`+`, `-`, `*`, `/`)
   - [x] Сравнения (`>`, `<`, `==`, `!=`)
-  - [ ] Логические операции (`&&`, `||`)
+  - [x] Логические операции (`&&`, `||`)
 
 #### **3. Ошибки**
-- [ ] Вывод ошибок в понятном формате (`Error(String)`)
+- [?] Вывод ошибок в понятном формате (`Error(String)`)
 - [ ] Поддержка исключений (`TryHandleStatement`)
 
 #### **4. Дополнительно**

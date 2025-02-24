@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 
 
@@ -26,17 +25,20 @@ pub enum Statement {
     FunctionCall(String, Vec<Expression>)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expression {
     Literal(Literal),
     Variable(String),
     BinaryOperation(Box<Expression>, Operator, Box<Expression>),
     FunctionCall(String, Vec<Expression>),
     List(Vec<Expression>),
-    Dictionary(HashMap<Literal, Expression>),
+    Dictionary(Vec<(Literal, Expression)>),
     Tuple(Vec<Expression>),
     Null,
-    MemberAccess(Box<Expression>, String),
+
+    // Сейчас нет нужды в MemberAccess
+    // MemberAccess(Box<Expression>, String), 
+    
     MethodCall(Box<Expression>, String, Vec<Expression>),
     Error(String),
     Break,
@@ -46,7 +48,7 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub struct TryHandleStatement {
     pub try_body: Vec<Statement>,
-    pub catch_body: Vec<Statement>,
+    pub handle_body: Vec<Statement>,
     pub finally_body: Option<Vec<Statement>>,
 }
 
@@ -95,7 +97,7 @@ pub struct Assignment {
     pub value: Expression,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operator {
     Add,
     Subtract,
@@ -107,6 +109,8 @@ pub enum Operator {
     NotEqual,
     And,
     Or,
+    GreaterThanOrEqual,
+    LessThanOrEqual,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -116,7 +120,7 @@ pub enum Literal {
     Boolean(bool),
     String(String),
     List(Vec<Literal>),
-    Dictionary(Vec<(Literal, Literal)>),
+    Dictionary(Vec<(Literal, Expression)>),
     Tuple(Vec<Literal>),
     Null,
 }
@@ -232,10 +236,14 @@ impl Expression {
         Expression::List(elements)
     }
 
-    pub fn dictionary(pairs: HashMap<Literal, Expression>) -> Self {
-        Expression::Dictionary(pairs)
+    pub fn dictionary<'a>(dictionary: &'a Vec<(Literal, Expression)>, key: &'a Literal) -> Option<&'a Expression> {
+        for (k, v) in dictionary.iter() {
+            if k == key {
+                return Some(v);
+            }
+        }
+        None
     }
-
     pub fn null() -> Self {
         Expression::Null
     }
@@ -280,5 +288,13 @@ impl Operator {
 
     pub fn or() -> Self {
         Operator::Or
+    }
+
+    pub fn greater_than_or_equal() -> Self {
+        Operator::GreaterThanOrEqual
+    }
+
+    pub fn less_than_or_equal() -> Self {
+        Operator::LessThanOrEqual
     }
 }

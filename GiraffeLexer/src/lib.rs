@@ -121,7 +121,7 @@ impl Lexer {
             (r#""([^"\\]|\\.)*""#, Some(TokenType::STRING)),
 
             // Операторы
-            (r"[+\-*/%=<>!&|^]=?|==|!=|&&|\|\|", Some(TokenType::OPERATOR)),
+            (r"==|!=|&&|\|\||[+\-*/%=<>!&|^]=?", Some(TokenType::OPERATOR)),
 
             // Скобки (включая круглые, фигурные и квадратные)
             (r"[\(\)\{\}\[\]]", Some(TokenType::BRACKET)),
