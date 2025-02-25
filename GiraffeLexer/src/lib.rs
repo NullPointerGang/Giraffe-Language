@@ -51,13 +51,17 @@ pub enum TokenType {
 pub struct Token {
     pub token_type: TokenType,
     pub value: String,
+    pub line: usize,
+    pub column: usize,
 }
 
 impl Token {
-    pub fn new(token_type: TokenType, value: &str) -> Self {
+    pub fn new(token_type: TokenType, value: &str, line: usize, column: usize) -> Self {
         Token {
             token_type,
             value: value.to_string(),
+            line,
+            column,
         }
     }
 }
@@ -74,7 +78,7 @@ impl Lexer {
         for kw in &[
             "const", "func", "var", "if", "elif", "else", "while", "for",
             "continue", "break", "return", "is", "in", "and", "or", "not",
-            "try", "handle", "finally"
+            "try", "handle", "finally", "get"
         ] {
             keywords.insert(kw.to_string(), TokenType::KEYWORD);
         }
@@ -155,6 +159,9 @@ impl Lexer {
         let mut tokens = Vec::new();
         let mut position = 0;
         let code_len = code.len();
+        
+        let mut line = 1;
+        let mut column = 1;
 
         while position < code_len {
             let slice = &code[position..];
@@ -162,15 +169,24 @@ impl Lexer {
 
             for (regex, token_type_opt) in &self.regex_patterns {
                 if let Some(mat) = regex.find(slice) {
-                    // Благодаря якорю, совпадение должно начинаться с 0
                     if mat.start() != 0 {
                         continue;
                     }
                     let value = &slice[mat.start()..mat.end()];
-                    // Если шаблон возвращает None – пропускаем (например, пробелы)
+                    
                     if let Some(token_type) = token_type_opt {
-                        tokens.push(Token::new(token_type.clone(), value));
+                        tokens.push(Token::new(token_type.clone(), value, line, column));
                     }
+
+                    for ch in value.chars() {
+                        if ch == '\n' {
+                            line += 1;
+                            column = 1;
+                        } else {
+                            column += 1;
+                        }
+                    }
+
                     position += mat.end();
                     matched = true;
                     break;
@@ -178,15 +194,16 @@ impl Lexer {
             }
 
             if !matched {
+                let err_char = code[position..].chars().next().unwrap();
                 return Err(format!(
-                    "Нераспознанный символ на позиции {}: '{}'",
-                    position,
-                    &code[position..].chars().next().unwrap()
+                    "Нераспознанный символ на позиции {} (line {}, column {}): '{}'",
+                    position, line, column, err_char
                 ));
             }
         }
 
-        tokens.push(Token::new(TokenType::EOF, "EOF"));
+        // Добавляем токен EOF с текущими координатами
+        tokens.push(Token::new(TokenType::EOF, "EOF", line, column));
         Ok(tokens)
     }
 }

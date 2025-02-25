@@ -256,246 +256,12 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                         InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                     }
                 }
-                
-                match object_literal {
-                    Literal::List(ref list) => {
-                        match name.as_str() {
-                            "append" => {
-                                if evaluated_arguments.len() != 1 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'append' ожидает один аргумент".into())
-                                    );
-                                }
-                                let mut new_list = list.clone();
-                                new_list.push(evaluated_arguments[0].clone());
-                                InterpreterResult::Ok(Literal::List(new_list))
-                            },
-                            "length" => {
-                                InterpreterResult::Ok(Literal::Integer(list.len() as i64))
-                            },
-                            "get" => {
-                                if evaluated_arguments.len() != 1 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'get' ожидает один аргумент".into())
-                                    );
-                                }
-                                let index = match &evaluated_arguments[0] {
-                                    Literal::Integer(i) => *i as usize,
-                                    _ => return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
-                                    ),
-                                };
-                                if index >= list.len() {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
-                                    );
-                                }
-                                InterpreterResult::Ok(list[index].clone())
-                            },
-                            "set" => {
-                                if evaluated_arguments.len() != 2 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'set' ожидает два аргумента".into())
-                                    );
-                                }
-                                let index = match &evaluated_arguments[0] {
-                                    Literal::Integer(i) => *i as usize,
-                                    _ => return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
-                                    ),
-                                };
-                                if index >= list.len() {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
-                                    );
-                                }
-                                let mut new_list = list.clone();
-                                new_list[index] = evaluated_arguments[1].clone();
-                                InterpreterResult::Ok(Literal::List(new_list))
-                            },
-                            "remove" => {
-                                if evaluated_arguments.len() != 1 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'remove' ожидает один аргумент".into())
-                                    );
-                                }
-                                let index = match &evaluated_arguments[0] {
-                                    Literal::Integer(i) => *i as usize,
-                                    _ => return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
-                                    ),
-                                };
-                                if index >= list.len() {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
-                                    );
-                                }
-                                let mut new_list = list.clone();
-                                new_list.remove(index);
-                                InterpreterResult::Ok(Literal::List(new_list))
-                            },
-                            _ => InterpreterResult::Err(
-                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для списка", name))
-                            ),
-                        }
-                    },
-                    Literal::Dictionary(ref dict) => {
-                        match name.as_str() {
-                            "keys" => {
-                                let keys = dict.iter().map(|(key, _)| key.clone()).collect();
-                                InterpreterResult::Ok(Literal::List(keys))
-                            },
-                            "values" => {
-                                let values = dict.iter().map(|(_, expr)| {
-                                    match expr {
-                                        Expression::Literal(lit) => lit.clone(),
-                                        _ => Literal::Null,
-                                    }
-                                }).collect();
-                                InterpreterResult::Ok(Literal::List(values))
-                            },
-                            "get" => {
-                                if evaluated_arguments.len() != 1 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'get' ожидает один аргумент".into())
-                                    );
-                                }
-                                let key = &evaluated_arguments[0];
-                                for (dict_key, dict_value) in dict {
-                                    if dict_key == key {
-                                        if let Expression::Literal(literal) = dict_value {
-                                            return InterpreterResult::Ok(literal.clone());
-                                        } else {
-                                            return InterpreterResult::Err(InterpreterError::RuntimeError("Dictionary value is not a literal".into()));
-                                        }                                        
-                                    }
-                                }
-                                InterpreterResult::Ok(Literal::Null)
-                            },
-                            "set" => {
-                                if evaluated_arguments.len() != 2 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'set' ожидает два аргумента".into())
-                                    );
-                                }
-                                let key = &evaluated_arguments[0];
-                                let value = &evaluated_arguments[1];
-                                let mut new_dict = dict.clone();
-                                if let Some((_, expr)) = new_dict.iter_mut().find(|(k, _)| k == key) {
-                                    *expr = Expression::Literal(value.clone());
-                                } else {
-                                    new_dict.push((key.clone(), Expression::Literal(value.clone())));
-                                }                                
-                                InterpreterResult::Ok(Literal::Dictionary(new_dict))
-                            },
-                            "remove" => {
-                                if evaluated_arguments.len() != 1 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'remove' ожидает один аргумент".into())
-                                    );
-                                }
-                                let key = &evaluated_arguments[0];
-                                let mut new_dict = dict.clone();
-                                new_dict.retain(|(k, _)| k != key);
-                                InterpreterResult::Ok(Literal::Dictionary(new_dict))
-                            },
-                            "length" => {
-                                InterpreterResult::Ok(Literal::Integer(dict.len() as i64))
-                            },
-                            _ => InterpreterResult::Err(
-                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для словаря", name))
-                            ),
-                        }
-                    },
-                    Literal::String(ref s) => {
-                        match name.as_str() {
-                            "length" => InterpreterResult::Ok(Literal::Integer(s.len() as i64)),
-                            "toUpperCase" => InterpreterResult::Ok(Literal::String(s.to_uppercase())),
-                            "toLowerCase" => InterpreterResult::Ok(Literal::String(s.to_lowercase())),
-                            "split" => {
-                                if evaluated_arguments.len() != 1 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'split' ожидает один аргумент".into())
-                                    );
-                                }
-                                let separator = match &evaluated_arguments[0] {
-                                    Literal::String(sep) => sep,
-                                    _ => return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Сепаратор должен быть строкой".into())
-                                    ),
-                                };
-                                let parts: Vec<Literal> = s.split(separator).map(|part| Literal::String(part.to_string())).collect();
-                                InterpreterResult::Ok(Literal::List(parts))
-                            },
-                            "replace" => {
-                                if evaluated_arguments.len() != 2 {
-                                    return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Метод 'replace' ожидает два аргумента".into())
-                                    );
-                                }
-                                let old = match &evaluated_arguments[0] {
-                                    Literal::String(sep) => sep,
-                                    _ => return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Старый сепаратор должен быть строкой".into())
-                                    ),
-                                };
-                                let new = match &evaluated_arguments[1] {
-                                    Literal::String(sep) => sep,
-                                    _ => return InterpreterResult::Err(
-                                        InterpreterError::RuntimeError("Новый сепаратор должен быть строкой".into())
-                                    ),
-                                };
-                                InterpreterResult::Ok(Literal::String(s.replace(old, new)))
-                            },
-                            _ => InterpreterResult::Err(
-                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для строки", name))
-                            ),
-                        }
-                    },
-                    Literal::Integer(num) => {
-                        match name.as_str() {
-                            "toString" => InterpreterResult::Ok(Literal::String(num.to_string())),
-                            _ => InterpreterResult::Err(
-                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для числа", name))
-                            ),
-                        }
-                    },
-                    Literal::Float(num) => {
-                        match name.as_str() {
-                            "toString" => InterpreterResult::Ok(Literal::String(num.to_string())),
-                            "toInt" => InterpreterResult::Ok(Literal::Integer(num.into_inner() as i64)),
-                            _ => InterpreterResult::Err(
-                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для числа", name))
-                            ),
-                        }
-                    },
-                    Literal::Boolean(_) => {
-                        match name.as_str() {
-                            "toString" => InterpreterResult::Ok(Literal::String(match object_literal {
-                                Literal::Boolean(true) => "true".to_string(),
-                                Literal::Boolean(false) => "false".to_string(),
-                                _ => unreachable!(),
-                            })),
-                            _ => InterpreterResult::Err(
-                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для логического значения", name))
-                            ),
-                        }
-                    },
-                    Literal::Null => {
-                        match name.as_str() {
-                            "toString" => InterpreterResult::Ok(Literal::String("null".to_string())),
-                            _ => InterpreterResult::Err(
-                                InterpreterError::RuntimeError(format!("Метод '{}' не определён для null", name))
-                            ),
-                        }
-                    }
-                    _ => InterpreterResult::Err(
-                        InterpreterError::RuntimeError(format!("Нельзя вызвать метод на типе: {:?}", object_literal))
-                    ),
-                }
+                let object_method = InterpreterObjectMethod::execute(object_literal, name, evaluated_arguments);
+                object_method
             },            
-            
+    
             _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported expression: {:?}", expr))),
+                 
         }
     }
 
@@ -821,6 +587,248 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
     }
 }
 
+pub struct InterpreterObjectMethod;
+
+impl InterpreterObjectMethod {
+    pub fn execute(object_literal: Literal, name: String, evaluated_arguments: Vec<Literal>) -> InterpreterResult<Literal> {
+        match object_literal {
+            Literal::List(ref list) => {
+                match name.as_str() {
+                    "append" => {
+                        if evaluated_arguments.len() != 1 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'append' ожидает один аргумент".into())
+                            );
+                        }
+                        let mut new_list = list.clone();
+                        new_list.push(evaluated_arguments[0].clone());
+                        InterpreterResult::Ok(Literal::List(new_list))
+                    },
+                    "length" => {
+                        InterpreterResult::Ok(Literal::Integer(list.len() as i64))
+                    },
+                    "get" => {
+                        if evaluated_arguments.len() != 1 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'get' ожидает один аргумент".into())
+                            );
+                        }
+                        let index = match &evaluated_arguments[0] {
+                            Literal::Integer(i) => *i as usize,
+                            _ => return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
+                            ),
+                        };
+                        if index >= list.len() {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
+                            );
+                        }
+                        InterpreterResult::Ok(list[index].clone())
+                    },
+                    "set" => {
+                        if evaluated_arguments.len() != 2 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'set' ожидает два аргумента".into())
+                            );
+                        }
+                        let index = match &evaluated_arguments[0] {
+                            Literal::Integer(i) => *i as usize,
+                            _ => return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
+                            ),
+                        };
+                        if index >= list.len() {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
+                            );
+                        }
+                        let mut new_list = list.clone();
+                        new_list[index] = evaluated_arguments[1].clone();
+                        InterpreterResult::Ok(Literal::List(new_list))
+                    },
+                    "remove" => {
+                        if evaluated_arguments.len() != 1 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'remove' ожидает один аргумент".into())
+                            );
+                        }
+                        let index = match &evaluated_arguments[0] {
+                            Literal::Integer(i) => *i as usize,
+                            _ => return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Индекс должен быть целым числом".into())
+                            ),
+                        };
+                        if index >= list.len() {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
+                            );
+                        }
+                        let mut new_list = list.clone();
+                        new_list.remove(index);
+                        InterpreterResult::Ok(Literal::List(new_list))
+                    },
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Метод '{}' не определён для списка", name))
+                    ),
+                }
+            },
+            Literal::Dictionary(ref dict) => {
+                match name.as_str() {
+                    "keys" => {
+                        let keys = dict.iter().map(|(key, _)| key.clone()).collect();
+                        InterpreterResult::Ok(Literal::List(keys))
+                    },
+                    "values" => {
+                        let values = dict.iter().map(|(_, expr)| {
+                            match expr {
+                                Expression::Literal(lit) => lit.clone(),
+                                _ => Literal::Null,
+                            }
+                        }).collect();
+                        InterpreterResult::Ok(Literal::List(values))
+                    },
+                    "get" => {
+                        if evaluated_arguments.len() != 1 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'get' ожидает один аргумент".into())
+                            );
+                        }
+                        let key = &evaluated_arguments[0];
+                        for (dict_key, dict_value) in dict {
+                            if dict_key == key {
+                                if let Expression::Literal(literal) = dict_value {
+                                    return InterpreterResult::Ok(literal.clone());
+                                } else {
+                                    return InterpreterResult::Err(InterpreterError::RuntimeError("Dictionary value is not a literal".into()));
+                                }                                        
+                            }
+                        }
+                        InterpreterResult::Ok(Literal::Null)
+                    },
+                    "set" => {
+                        if evaluated_arguments.len() != 2 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'set' ожидает два аргумента".into())
+                            );
+                        }
+                        let key = &evaluated_arguments[0];
+                        let value = &evaluated_arguments[1];
+                        let mut new_dict = dict.clone();
+                        if let Some((_, expr)) = new_dict.iter_mut().find(|(k, _)| k == key) {
+                            *expr = Expression::Literal(value.clone());
+                        } else {
+                            new_dict.push((key.clone(), Expression::Literal(value.clone())));
+                        }                                
+                        InterpreterResult::Ok(Literal::Dictionary(new_dict))
+                    },
+                    "remove" => {
+                        if evaluated_arguments.len() != 1 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'remove' ожидает один аргумент".into())
+                            );
+                        }
+                        let key = &evaluated_arguments[0];
+                        let mut new_dict = dict.clone();
+                        new_dict.retain(|(k, _)| k != key);
+                        InterpreterResult::Ok(Literal::Dictionary(new_dict))
+                    },
+                    "length" => {
+                        InterpreterResult::Ok(Literal::Integer(dict.len() as i64))
+                    },
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Метод '{}' не определён для словаря", name))
+                    ),
+                }
+            },
+            Literal::String(ref s) => {
+                match name.as_str() {
+                    "length" => InterpreterResult::Ok(Literal::Integer(s.len() as i64)),
+                    "toUpperCase" => InterpreterResult::Ok(Literal::String(s.to_uppercase())),
+                    "toLowerCase" => InterpreterResult::Ok(Literal::String(s.to_lowercase())),
+                    "split" => {
+                        if evaluated_arguments.len() != 1 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'split' ожидает один аргумент".into())
+                            );
+                        }
+                        let separator = match &evaluated_arguments[0] {
+                            Literal::String(sep) => sep,
+                            _ => return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Сепаратор должен быть строкой".into())
+                            ),
+                        };
+                        let parts: Vec<Literal> = s.split(separator).map(|part| Literal::String(part.to_string())).collect();
+                        InterpreterResult::Ok(Literal::List(parts))
+                    },
+                    "replace" => {
+                        if evaluated_arguments.len() != 2 {
+                            return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Метод 'replace' ожидает два аргумента".into())
+                            );
+                        }
+                        let old = match &evaluated_arguments[0] {
+                            Literal::String(sep) => sep,
+                            _ => return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Старый сепаратор должен быть строкой".into())
+                            ),
+                        };
+                        let new = match &evaluated_arguments[1] {
+                            Literal::String(sep) => sep,
+                            _ => return InterpreterResult::Err(
+                                InterpreterError::RuntimeError("Новый сепаратор должен быть строкой".into())
+                            ),
+                        };
+                        InterpreterResult::Ok(Literal::String(s.replace(old, new)))
+                    },
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Метод '{}' не определён для строки", name))
+                    ),
+                }
+            },
+            Literal::Integer(num) => {
+                match name.as_str() {
+                    "toString" => InterpreterResult::Ok(Literal::String(num.to_string())),
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Метод '{}' не определён для числа", name))
+                    ),
+                }
+            },
+            Literal::Float(num) => {
+                match name.as_str() {
+                    "toString" => InterpreterResult::Ok(Literal::String(num.to_string())),
+                    "toInt" => InterpreterResult::Ok(Literal::Integer(num.into_inner() as i64)),
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Метод '{}' не определён для числа", name))
+                    ),
+                }
+            },
+            Literal::Boolean(_) => {
+                match name.as_str() {
+                    "toString" => InterpreterResult::Ok(Literal::String(match object_literal {
+                        Literal::Boolean(true) => "true".to_string(),
+                        Literal::Boolean(false) => "false".to_string(),
+                        _ => unreachable!(),
+                    })),
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Метод '{}' не определён для логического значения", name))
+                    ),
+                }
+            },
+            Literal::Null => {
+                match name.as_str() {
+                    "toString" => InterpreterResult::Ok(Literal::String("null".to_string())),
+                    _ => InterpreterResult::Err(
+                        InterpreterError::RuntimeError(format!("Метод '{}' не определён для null", name))
+                    ),
+                }
+            }
+            _ => InterpreterResult::Err(
+                InterpreterError::RuntimeError(format!("Нельзя вызвать метод на типе: {:?}", object_literal))
+            ),
+        }
+    }
+}
 
 pub struct InterpreterBinaryOperation;
 

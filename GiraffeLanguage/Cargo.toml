@@ -8,3 +8,4 @@ GiraffeInterpreter ={ path = "../GiraffeInterpreter"}
 GiraffeLexer = { path = "../GiraffeLexer" }
 GiraffeAST = { path = "../GiraffeAST"}
 GiraffeParser ={ path = "../GiraffeParser"}
+colored = "2.0"

@@ -1,6 +1,5 @@
 use GiraffeAST::*;
 use GiraffeLexer::{Token, TokenType};
-use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 
 
@@ -8,12 +7,19 @@ use ordered_float::OrderedFloat;
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    code_line: usize,
+    code_pos: usize,
 }
 
 impl Parser {
     /// Создаёт новый парсер на основе вектора токенов.
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser {
+            tokens,
+            pos: 0,
+            code_pos: 0,
+            code_line: 1,
+        }
     }
 
     /// Возвращает текущий токен.
@@ -24,9 +30,13 @@ impl Parser {
     /// Переходит к следующему токену.
     fn advance(&mut self) {
         if self.pos < self.tokens.len() {
+            let token = &self.tokens[self.pos];
+            self.code_line = token.line;
+            self.code_pos = token.column;
+            
             self.pos += 1;
         }
-    }
+    }    
 
     /// Проверяет, достигнут ли конец входного потока.
     fn is_at_end(&self) -> bool {
@@ -154,9 +164,10 @@ impl Parser {
                 if self.peek_token_is(TokenType::OPERATOR, Some("=")) {
                     self.parse_assignment()
                 } else {
-                    Err(format!("Неожиданный идентификатор: {}", token.value))
+                    let expr = self.parse_expression()?;
+                    Ok(Statement::ExpressionStatement(expr))
                 }
-            }
+            }            
             _ => Err(format!("Неожиданный токен в операторе: {:?}", token)),
         }
     }        
@@ -787,5 +798,17 @@ impl Parser {
         }
         let token = self.current();
         token.token_type == TokenType::KEYWORD && token.value == kw
+    }
+
+    // =========================================================================
+    // Вспомогательные функции для составления ошибок
+    // =========================================================================
+
+    pub fn get_current_position(&self) -> usize {
+        return self.pos;
+    }
+
+    pub fn get_current_token(&self) -> Token {
+        return self.tokens[self.pos].clone();
     }
 }
