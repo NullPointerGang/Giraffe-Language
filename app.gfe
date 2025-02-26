@@ -62,6 +62,12 @@ func main(){
     var dictionary = {"key1": "value1", "key2": "value2"}
     print!(dictionary)  // Выводит словарь
 
+    var example_list = []
+
+    var example_list = example_list.append("123")
+
+    print!(example_list)
+
     // Пример работы с try/handle
     try {
         var unknown_var = 10 / 0

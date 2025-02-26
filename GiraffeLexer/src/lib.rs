@@ -100,7 +100,6 @@ impl Lexer {
             // Сложные типы (list, dict, set, tuple)
             (r"\blist\b", Some(TokenType::ANNOTATION_TYPE)),
             (r"\bdict\b", Some(TokenType::ANNOTATION_TYPE)),
-            (r"\bset\b", Some(TokenType::ANNOTATION_TYPE)),
             (r"\btuple\b", Some(TokenType::ANNOTATION_TYPE)),
 
             // Ключевые слова

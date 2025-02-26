@@ -2,6 +2,29 @@ use ordered_float::OrderedFloat;
 use GiraffeAST::*;
 use std::collections::HashMap;
 use std::fmt::{self, format};
+use colored::*;
+use std::fs;
+
+
+pub fn print_error(title: &str, details: &[(&str, String)], filename: &str, line: usize, column: usize) {
+    let absolute_path = match fs::canonicalize(filename) {
+        Ok(path) => path.display().to_string(),
+        Err(_) => filename.to_string(),
+    };
+
+    eprintln!("{}", format!("error: {}", title).red().bold());
+    
+    eprintln!(" --> {}:{}:{}", absolute_path, line, column);
+    eprintln!("  |");
+    
+    for (label, value) in details {
+        eprintln!("{} {}", label.green().bold(), value);
+    }
+
+    eprintln!("  |");
+    eprintln!("  |                 ^");
+    eprintln!();
+}
 
 pub struct LocalLiteral(pub GiraffeAST::Literal);
 
@@ -114,6 +137,7 @@ impl StateStore for Context {
         self.clone() // Для простоты используем clone. В будущем сделать более эффективный механизм!
     }
 }
+
 
 /// Интерпретатор, параметризованный типом хранилища состояния.
 /// Благодаря обобщённости можно в будущем использовать более умное хранилище или снапшоты.
@@ -244,6 +268,11 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
             // Expression::MemberAccess(access, name) => {},
             
             Expression::MethodCall(access, name, args) => {
+                let maybe_var_name = match *access {
+                    Expression::Variable(ref var_name) => Some(var_name.clone()),
+                    _ => None,
+                };
+                
                 let object_literal = match self.execute_expression(*access) {
                     InterpreterResult::Ok(val) => val,
                     InterpreterResult::Err(e) => return InterpreterResult::Err(e),
@@ -256,9 +285,15 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                         InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                     }
                 }
-                let object_method = InterpreterObjectMethod::execute(object_literal, name, evaluated_arguments);
-                object_method
-            },            
+            
+                let result = InterpreterObjectMethod::execute(object_literal, name, evaluated_arguments);
+                
+                if let (Some(var_name), InterpreterResult::Ok(ref updated_object)) = (maybe_var_name, &result) {
+                     self.global_state.set_variable(&var_name, updated_object.clone());
+                }
+                
+                result
+            },                      
     
             _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported expression: {:?}", expr))),
                  
@@ -269,7 +304,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
     pub fn execute_statement(&mut self, statement: Statement) -> InterpreterResult<()> {
         match statement {
             Statement::PrintStatement(print_statement) => {
-                let value = print_statement.value;
+                let value = print_statement.value.clone();
                 match self.execute_expression(value) {
                     InterpreterResult::Ok(Literal::List(lst)) => {
                         let mut output = String::new();
@@ -289,7 +324,13 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                         InterpreterResult::Ok(())
                     }
                     InterpreterResult::Err(e) => {
-                        println!("Interpreter error: {:?}", e);
+                        print_error(
+                            &format!("Error in print statement: {:?}", e),
+                            &[(&format!("{:?}", print_statement.value).to_string(), "".to_string())],
+                            "",
+                            0,
+                            0
+                        );                        
                         InterpreterResult::Err(e)
                     }
                 }
@@ -386,6 +427,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
             },
             Statement::WhileStatement(while_statement) => {
                 let mut condition = self.execute_expression(while_statement.condition.clone());
+                println!("{:#?}",while_statement);
                 while let InterpreterResult::Ok(Literal::Boolean(true)) = condition {
                     for stmt in &while_statement.body {
                         match self.execute_statement(stmt.clone()) {
@@ -624,6 +666,7 @@ impl InterpreterObjectMethod {
                                 InterpreterError::RuntimeError("Индекс выходит за пределы списка".into())
                             );
                         }
+                        println!("INER: {:?}", {list[index].clone()});
                         InterpreterResult::Ok(list[index].clone())
                     },
                     "set" => {
@@ -667,6 +710,9 @@ impl InterpreterObjectMethod {
                         let mut new_list = list.clone();
                         new_list.remove(index);
                         InterpreterResult::Ok(Literal::List(new_list))
+                    },
+                    "len" => {
+                        InterpreterResult::Ok(Literal::Integer(list.len() as i64))
                     },
                     _ => InterpreterResult::Err(
                         InterpreterError::RuntimeError(format!("Метод '{}' не определён для списка", name))
@@ -973,50 +1019,6 @@ impl InterpreterBinaryOperation {
             (Literal::Integer(l), Literal::Float(r)) => InterpreterResult::Ok(Literal::Boolean(l as f64 <= r.0)),
             (Literal::Float(l), Literal::Integer(r)) => InterpreterResult::Ok(Literal::Boolean(l.0 <= r as f64)),
             _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported less than or equal types: {:?} <= {:?}", left, right))),
-        }
-    }
-}
-
-
-pub fn interpret(ast_node: AstNode) {
-    let mut global_state = Context::new();
-
-    if let AstNode::Program { statements } = &ast_node {
-        for statement in statements {
-            if let Statement::FunctionDeclaration(func_decl) = statement {
-                global_state.set_function(&func_decl.name, Function {
-                    params: func_decl.parameters.iter().map(|p| p.name.clone()).collect(),
-                    body: func_decl.body.clone(),
-                });
-                // println!("Registered function: {}", func_decl.name);
-            }
-        }
-    }
-
-    let mut interpreter = Interpreter::new(global_state.clone());
-
-    if let AstNode::Program { statements } = ast_node {
-        for statement in statements {
-            if !matches!(statement, Statement::FunctionDeclaration(_)) {
-                match interpreter.execute_statement(statement.clone()) {
-                    InterpreterResult::Ok(_) => {}
-                    InterpreterResult::Err(e) => {
-                        println!("Runtime error: {:?}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(main_func) = global_state.get_function("main") {
-        // println!("Executing 'main' function...");
-        for statement in &main_func.body {
-            match interpreter.execute_statement(statement.clone()) {
-                InterpreterResult::Ok(_) => {}
-                InterpreterResult::Err(e) => {
-                    println!("Runtime error in main: {:?}", e);
-                }
-            }
         }
     }
 }

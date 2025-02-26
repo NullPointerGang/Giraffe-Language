@@ -1,30 +1,68 @@
 use std::env;
 use std::fs;
-use colored::*;
 use std::process;
+use colored::*;
 use GiraffeLexer::Lexer;
 use GiraffeParser::Parser;
-use GiraffeInterpreter::interpret;
+use GiraffeInterpreter::{Interpreter, Context, InterpreterResult, Function, StateStore, print_error};
+use GiraffeAST::{AstNode, Statement};
 
 
-fn print_error(title: &str, details: &[(&str, String)], filename: &str, line: usize, column: usize) {
-    let absolute_path = match fs::canonicalize(filename) {
-        Ok(path) => path.display().to_string(),
-        Err(_) => filename.to_string(),
-    };
+pub fn interpret(ast_node: AstNode) {
+    let mut global_state = Context::new();
 
-    eprintln!("{}", format!("error: {}", title).red().bold());
-    
-    eprintln!(" --> {}:{}:{}", absolute_path, line, column);
-    eprintln!("  |");
-    
-    for (label, value) in details {
-        eprintln!("{} {}", label.green().bold(), value);
+    if let AstNode::Program { statements } = &ast_node {
+        for statement in statements {
+            if let Statement::FunctionDeclaration(func_decl) = statement {
+                global_state.set_function(&func_decl.name, Function {
+                    params: func_decl.parameters.iter().map(|p| p.name.clone()).collect(),
+                    body: func_decl.body.clone(),
+                });
+            }
+        }
     }
 
-    eprintln!("  |");
-    eprintln!("  |                 ^");
-    eprintln!();
+    let mut interpreter = Interpreter::new(global_state.clone());
+
+    if let AstNode::Program { statements } = ast_node {
+        for statement in statements {
+            if !matches!(statement, Statement::FunctionDeclaration(_)) {
+                match interpreter.execute_statement(statement.clone()) {
+                    InterpreterResult::Ok(_) => {}
+                    InterpreterResult::Err(e) => {
+                        println!("Ошибка выполнения: {:?}", e);
+                
+                        print_error(
+                            "Ошибка выполнения",
+                            &[("Описание ошибки", format!("{:?}", e))],
+                            "unknown",
+                            0, 
+                            0,
+                        );
+                    }
+                }                
+            }
+        }
+    }
+
+    if let Some(main_func) = global_state.get_function("main") {
+        for statement in &main_func.body {
+            match interpreter.execute_statement(statement.clone()) {
+                InterpreterResult::Ok(_) => {}
+                InterpreterResult::Err(e) => {
+                    println!("Ошибка выполнения: {:?}", e);
+            
+                    print_error(
+                        "Ошибка выполнения",
+                        &[("Описание ошибки", format!("{:?}", e))],
+                        "unknown",
+                        0, 
+                        0,
+                    );
+                }
+            }            
+        }
+    }
 }
 
 fn main() {
@@ -68,6 +106,10 @@ fn main() {
                     filename,
                     error_token.line,
                     error_token.column,
+                );
+                println!(
+                    "{}",
+                    format!("Детали: {:?}", program.err().unwrap()).on_red().bold()
                 );
                 process::exit(1);
             }
