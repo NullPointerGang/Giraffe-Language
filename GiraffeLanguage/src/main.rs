@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::process;
 use colored::*;
+use GiraffeAST::Position;
 use GiraffeLexer::Lexer;
 use GiraffeParser::Parser;
 use GiraffeInterpreter::{Interpreter, Context, InterpreterResult, Function, StateStore, print_error};
@@ -13,7 +14,7 @@ pub fn interpret(ast_node: AstNode) {
 
     if let AstNode::Program { statements } = &ast_node {
         for statement in statements {
-            if let Statement::FunctionDeclaration(func_decl) = statement {
+            if let Statement::FunctionDeclaration(func_decl, pos) = statement {
                 global_state.set_function(&func_decl.name, Function {
                     params: func_decl.parameters.iter().map(|p| p.name.clone()).collect(),
                     body: func_decl.body.clone(),
@@ -26,7 +27,7 @@ pub fn interpret(ast_node: AstNode) {
 
     if let AstNode::Program { statements } = ast_node {
         for statement in statements {
-            if !matches!(statement, Statement::FunctionDeclaration(_)) {
+            if !matches!(statement, Statement::FunctionDeclaration(_, pos)) {
                 match interpreter.execute_statement(statement.clone()) {
                     InterpreterResult::Ok(_) => {}
                     InterpreterResult::Err(e) => {
@@ -36,8 +37,7 @@ pub fn interpret(ast_node: AstNode) {
                             "Ошибка выполнения",
                             &[("Описание ошибки", format!("{:?}", e))],
                             "unknown",
-                            0, 
-                            0,
+                            Position(0,0),
                         );
                     }
                 }                
@@ -56,8 +56,7 @@ pub fn interpret(ast_node: AstNode) {
                         "Ошибка выполнения",
                         &[("Описание ошибки", format!("{:?}", e))],
                         "unknown",
-                        0, 
-                        0,
+                        Position(0,0),
                     );
                 }
             }            
@@ -80,8 +79,7 @@ fn main() {
                 "Ошибка при чтении файла",
                 &[("Детали", err.to_string())],
                 filename,
-                0,
-                0,
+                Position(0,0),
             );
             process::exit(1);
         }
@@ -104,8 +102,7 @@ fn main() {
                         ("Найденное значение", error_token.value.clone())
                     ],
                     filename,
-                    error_token.line,
-                    error_token.column,
+                    Position(error_token.position.line,error_token.position.column)
                 );
                 println!(
                     "{}",
@@ -119,8 +116,7 @@ fn main() {
                 "Ошибка токенизации",
                 &[("Детали", format!("{:?}", err))],
                 filename,
-                0,
-                0,
+                Position(0,0),
             );
             process::exit(1);
         }

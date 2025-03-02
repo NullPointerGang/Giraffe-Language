@@ -6,7 +6,7 @@ use colored::*;
 use std::fs;
 
 
-pub fn print_error(title: &str, details: &[(&str, String)], filename: &str, line: usize, column: usize) {
+pub fn print_error(title: &str, details: &[(&str, String)], filename: &str, position: &Position) {
     let absolute_path = match fs::canonicalize(filename) {
         Ok(path) => path.display().to_string(),
         Err(_) => filename.to_string(),
@@ -14,7 +14,7 @@ pub fn print_error(title: &str, details: &[(&str, String)], filename: &str, line
 
     eprintln!("{}", format!("error: {}", title).red().bold());
     
-    eprintln!(" --> {}:{}:{}", absolute_path, line, column);
+    eprintln!(" --> {}:{}:{}", absolute_path, position.line, position.column);
     eprintln!("  |");
     
     for (label, value) in details {
@@ -26,7 +26,9 @@ pub fn print_error(title: &str, details: &[(&str, String)], filename: &str, line
     eprintln!();
 }
 
-pub struct LocalLiteral(pub GiraffeAST::Literal);
+
+pub struct LocalLiteral(pub GiraffeAST::Literal, pub Position);
+
 
 impl fmt::Display for LocalLiteral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -39,7 +41,7 @@ impl fmt::Display for LocalLiteral {
             GiraffeAST::Literal::List(lst) => {
                 let elements: Vec<String> = lst
                     .iter()
-                    .map(|item| format!("{}", LocalLiteral(item.clone())))
+                    .map(|item| format!("{}", LocalLiteral(item.clone(), self.1.clone())))
                     .collect();
                 write!(f, r#"["{}"]"#, elements.join(", "))
             },
@@ -48,10 +50,12 @@ impl fmt::Display for LocalLiteral {
                     .iter()
                     .map(|(key, value_expr)| {
                         let value_str = match value_expr {
-                            GiraffeAST::Expression::Literal(lit) => format!("{}", LocalLiteral(lit.clone())),
+                            GiraffeAST::Expression::Literal(lit, pos) => {
+                                format!("{}", LocalLiteral(lit.clone(), pos.clone()))
+                            }
                             _ => format!("{:?}", value_expr),
                         };
-                        format!(r#""{}": "{}""#, LocalLiteral(key.clone()), value_str)
+                        format!(r#""{}": "{}""#, LocalLiteral(key.clone(), self.1.clone()), value_str)
                     })
                     .collect();
                 write!(f, "{{{}}}", elements.join(", "))
@@ -59,7 +63,7 @@ impl fmt::Display for LocalLiteral {
             GiraffeAST::Literal::Tuple(tpl) => {
                 let elements: Vec<String> = tpl
                     .iter()
-                    .map(|item| format!("{}", LocalLiteral(item.clone())))
+                    .map(|item| format!("{}", LocalLiteral(item.clone(), self.1.clone())))
                     .collect();
                 write!(f, "({})", elements.join(", "))
             },
@@ -161,12 +165,17 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
     // Выполнение выражения
     pub fn execute_expression(&mut self, expr: Expression) -> InterpreterResult<Literal> {
         match expr {
-            Expression::Literal(literal) => InterpreterResult::Ok(literal),
-            Expression::Variable(name) => match self.global_state.get_variable(&name) {
-                Some(value) => InterpreterResult::Ok(value),
-                None => InterpreterResult::Err(InterpreterError::UndefinedVariable(name)),
+            Expression::Literal(literal, _pos) => {
+                // Здесь позиция не влияет на вычисление, поэтому просто возвращаем литерал.
+                InterpreterResult::Ok(literal)
             },
-            Expression::List(list) => {
+            Expression::Variable(name, _pos) => {
+                match self.global_state.get_variable(&name) {
+                    Some(value) => InterpreterResult::Ok(value),
+                    None => InterpreterResult::Err(InterpreterError::UndefinedVariable(name)),
+                }
+            },
+            Expression::List(list, _pos) => {
                 let mut evaluated_list = Vec::new();
                 for item in list {
                     match self.execute_expression(item) {
@@ -176,17 +185,15 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                 }
                 InterpreterResult::Ok(Literal::List(evaluated_list))
             },
-            Expression::BinaryOperation(left_expr, op, right_expr) => {
+            Expression::BinaryOperation(left_expr, op, right_expr, _pos) => {
                 let left = match self.execute_expression(*left_expr) {
                     InterpreterResult::Ok(val) => val,
                     InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                 };
-
                 let right = match self.execute_expression(*right_expr) {
                     InterpreterResult::Ok(val) => val,
                     InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                 };
-
                 InterpreterBinaryOperation::execute(left, op, right)
             },
             Expression::Break => {
@@ -195,10 +202,10 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
             Expression::Continue => {
                 InterpreterResult::Err(InterpreterError::Continue)
             },
-            Expression::Null => {
+            Expression::Null(_pos) => {
                 InterpreterResult::Ok(Literal::Null)
             },
-            Expression::FunctionCall(func_name, func_arguments) => {
+            Expression::FunctionCall(func_name, func_arguments, _pos) => {
                 let mut evaluated_arguments = Vec::new();
                 for arg in func_arguments {
                     match self.execute_expression(arg) {
@@ -206,34 +213,28 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                         InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                     }
                 }
-
-                // println!("Call Stack: {:?}", self.call_stack);
-                // println!("Global State: {:?}", self.global_state);
-
                 match self.global_state.clone().get_function(&func_name) {
                     Some(func) => {
                         let mut local_context = self.global_state.snapshot();
-                        
                         for (param, arg_value) in func.params.iter().zip(evaluated_arguments.into_iter()) {
                             local_context.set_variable(param, arg_value);
                         }
-                        
                         let saved_state = self.global_state.snapshot();
                         let func_body = self.global_state.get_function(&func_name).map(|f| f.body.clone()); 
                         self.global_state = local_context;
             
                         let mut return_value: Option<Literal> = None;
-
                         if let Some(stmt) = func_body {
-                            match self.execute_statement(GiraffeAST::Statement::Block(stmt)) {
-                            InterpreterResult::Ok(()) => {},
-                            InterpreterResult::Err(InterpreterError::Return(val)) => {
-                                return_value = Some(val);
-                            },
-                            InterpreterResult::Err(e) => {
-                                self.global_state = saved_state;
-                                return InterpreterResult::Err(e);
-                            }
+                            // Передаем позицию (хотя здесь она может быть несущественна)
+                            match self.execute_statement(GiraffeAST::Statement::Block(stmt, _pos.clone())) {
+                                InterpreterResult::Ok(()) => {},
+                                InterpreterResult::Err(InterpreterError::Return(val)) => {
+                                    return_value = Some(val);
+                                },
+                                InterpreterResult::Err(e) => {
+                                    self.global_state = saved_state;
+                                    return InterpreterResult::Err(e);
+                                }
                             }
                         }
                         self.global_state = saved_state;
@@ -241,43 +242,44 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                             Some(value) => InterpreterResult::Ok(value),
                             None => InterpreterResult::Ok(Literal::Null),
                         }
-                        
                     },
-                    None => InterpreterResult::Err(InterpreterError::UndefinedFunction(format!("in expression {}", func_name))),
+                    None => InterpreterResult::Err(
+                        InterpreterError::UndefinedFunction(format!("in expression {}", func_name))
+                    ),
                 }
             },
-            Expression::Dictionary(dictionary_expression) => {
+            Expression::Dictionary(dictionary_expression, _pos) => {
                 let mut evaluated_dictionary = Vec::new();
                 for (key, value) in dictionary_expression {
-                    let evaluated_key = match self.execute_expression(GiraffeAST::Expression::Literal(key)) {
+                    // Здесь ключ — это литерал. Оборачиваем его в Expression::Literal, добавляя позицию,
+                    // чтобы использовать execute_expression. Можно использовать _pos как fallback.
+                    let evaluated_key = match self.execute_expression(
+                        GiraffeAST::Expression::Literal(key, _pos.clone())
+                    ) {
                         InterpreterResult::Ok(val) => val,
                         InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                     };
-            
+        
                     let evaluated_value = match self.execute_expression(value) {
                         InterpreterResult::Ok(val) => val,
                         InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                     };
-            
-                    evaluated_dictionary.push((evaluated_key, Expression::Literal(evaluated_value)));
+        
+                    evaluated_dictionary.push((evaluated_key, GiraffeAST::Expression::Literal(evaluated_value, _pos.clone())));
                 }
                 InterpreterResult::Ok(Literal::Dictionary(evaluated_dictionary))
             },
-
-            // Сейчас нет нужды в MemberAccess
-            // Expression::MemberAccess(access, name) => {},
-            
-            Expression::MethodCall(access, name, args) => {
+            Expression::MethodCall(access, name, args, _pos) => {
                 let maybe_var_name = match *access {
-                    Expression::Variable(ref var_name) => Some(var_name.clone()),
+                    Expression::Variable(ref var_name, _) => Some(var_name.clone()),
                     _ => None,
                 };
-                
+        
                 let object_literal = match self.execute_expression(*access) {
                     InterpreterResult::Ok(val) => val,
                     InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                 };
-
+        
                 let mut evaluated_arguments = Vec::new();
                 for arg in args {
                     match self.execute_expression(arg) {
@@ -285,25 +287,26 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                         InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                     }
                 }
-            
+        
                 let result = InterpreterObjectMethod::execute(object_literal, name, evaluated_arguments);
-                
+        
                 if let (Some(var_name), InterpreterResult::Ok(ref updated_object)) = (maybe_var_name, &result) {
-                     self.global_state.set_variable(&var_name, updated_object.clone());
+                    self.global_state.set_variable(&var_name, updated_object.clone());
                 }
-                
+        
                 result
-            },                      
-    
-            _ => InterpreterResult::Err(InterpreterError::RuntimeError(format!("Unsupported expression: {:?}", expr))),
-                 
+            },
+            _ => InterpreterResult::Err(
+                InterpreterError::RuntimeError(format!("Unsupported expression: {:?}", expr))
+            ),
         }
     }
+    
 
     // Выполнение инструкций
     pub fn execute_statement(&mut self, statement: Statement) -> InterpreterResult<()> {
         match statement {
-            Statement::PrintStatement(print_statement) => {
+            Statement::PrintStatement(print_statement, pos) => {
                 let value = print_statement.value.clone();
                 match self.execute_expression(value) {
                     InterpreterResult::Ok(Literal::List(lst)) => {
@@ -311,31 +314,29 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                         for item in lst {
                             if let Literal::String(s) = item {
                                 output.push_str(&s);
-                            }
-                            else {
-                                output.push_str(&LocalLiteral(item.clone()).to_string());
+                            } else {
+                                output.push_str(&LocalLiteral(item.clone(), pos.clone()).to_string());
                             }
                         }
                         println!("{}", output);
                         InterpreterResult::Ok(())
-                    }
+                    },
                     InterpreterResult::Ok(result) => {
                         println!("{:?}", result);
                         InterpreterResult::Ok(())
-                    }
+                    },
                     InterpreterResult::Err(e) => {
                         print_error(
                             &format!("Error in print statement: {:?}", e),
                             &[(&format!("{:?}", print_statement.value).to_string(), "".to_string())],
                             "",
-                            0,
-                            0
+                            &pos,
                         );                        
                         InterpreterResult::Err(e)
                     }
                 }
-            },
-            Statement::VariableDeclaration(var_decl) => {
+            },     
+            Statement::VariableDeclaration(var_decl, pos) => {
                 let var_name = var_decl.name;
                 let var_value = var_decl.value;
 
@@ -347,7 +348,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                     InterpreterResult::Err(e) => InterpreterResult::Err(e),
                 }                
             },
-            Statement::FunctionCall(name, args) => {
+            Statement::FunctionCall(name, args, pos) => {
                 if let Some(func) = self.global_state.get_function(&name) {
                     let func = func.clone();
     
@@ -382,7 +383,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                 }
             },
 
-            Statement::IfStatement(if_stmt) => {
+            Statement::IfStatement(if_stmt, pos) => {
                 let condition_result = self.execute_expression(if_stmt.condition);
                 match condition_result {
                     InterpreterResult::Ok(Literal::Boolean(true)) => {
@@ -396,7 +397,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                     },
                     InterpreterResult::Ok(Literal::Boolean(false)) => {
                         if let Some(elif) = if_stmt.elif {
-                            match self.execute_statement(Statement::IfStatement(*elif)) {
+                            match self.execute_statement(Statement::IfStatement(*elif, pos)) {
                                 InterpreterResult::Ok(()) => {},
                                 InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                             }
@@ -414,7 +415,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                     _ => return InterpreterResult::Err(InterpreterError::RuntimeError("Condition must evaluate to boolean".into())),
                 }
             },
-            Statement::Assignment(assignment_statement) => {
+            Statement::Assignment(assignment_statement, pos) => {
                 let name = assignment_statement.name;
                 let value = assignment_statement.value;
                 match self.execute_expression(value) {
@@ -425,7 +426,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                     InterpreterResult::Err(e) => InterpreterResult::Err(e),
                 }
             },
-            Statement::WhileStatement(while_statement) => {
+            Statement::WhileStatement(while_statement, pos) => {
                 let mut condition = self.execute_expression(while_statement.condition.clone());
                 println!("{:#?}",while_statement);
                 while let InterpreterResult::Ok(Literal::Boolean(true)) = condition {
@@ -446,7 +447,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                 InterpreterResult::Ok(())
             },
 
-            Statement::ForInStatement(loop_var, collection, body) => {
+            Statement::ForInStatement(loop_var, collection, body, pos) => {
                 match self.execute_expression(collection) {
                     InterpreterResult::Ok(Literal::List(list)) => {
                         for item in list {
@@ -496,12 +497,15 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                     InterpreterResult::Ok(Literal::Dictionary(dict)) => {
                         for (key, value_expr) in dict {
                             let value = match value_expr {
-                                Expression::Literal(lit) => lit.clone(),
+                                // Если значение – литерал, то извлекаем его с позицией, но позиция здесь не важна для вычисления
+                                Expression::Literal(lit, _lit_pos) => lit.clone(),
                                 _ => match self.execute_expression(value_expr) {
                                     InterpreterResult::Ok(val) => val,
                                     InterpreterResult::Err(e) => return InterpreterResult::Err(e),
                                 },
                             };
+                            // При создании кортежа (tuple) нам нужно передать позицию.
+                            // Здесь можно использовать позицию словаря, если более точную позицию нет.
                             let pair = Literal::Tuple(vec![key.clone(), value]);
                             self.global_state.set_variable(&loop_var, pair);
                             for stmt in &body {
@@ -521,7 +525,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                                 }
                             }
                         }
-                    },
+                    },                    
                     InterpreterResult::Ok(_) => {
                         return InterpreterResult::Err(
                             InterpreterError::RuntimeError("Collection must be a list, string, or dictionary".into())
@@ -532,7 +536,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                 InterpreterResult::Ok(())
             },
 
-            Statement::ReturnStatement(return_statement) => {
+            Statement::ReturnStatement(return_statement, pos) => {
                 let value_expr = return_statement.value.expect("Return statement must have a value");
                 match self.execute_expression(value_expr) {
                     InterpreterResult::Ok(val) => InterpreterResult::Err(InterpreterError::Return(val)),
@@ -540,7 +544,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                 }
             },            
             
-            Statement::TryHandleStatement(try_handle_statement) => {
+            Statement::TryHandleStatement(try_handle_statement, pos) => {
                 let try_body = try_handle_statement.try_body;
                 let handle_body = try_handle_statement.handle_body;
                 let error_body = try_handle_statement.finally_body;
@@ -579,7 +583,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                     }
                 }
             },
-            Statement::Block(block_statements) => {
+            Statement::Block(block_statements, pos) => {
                 let mut block_result = InterpreterResult::Ok(());
                 for stmt in block_statements {
                     block_result = self.execute_statement(stmt.clone());
@@ -589,7 +593,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                 }
                 block_result
             },
-            Statement::FunctionDeclaration(func_decl) => {
+            Statement::FunctionDeclaration(func_decl, pos) => {
                 self.global_state.set_function(
                     &func_decl.name,
                     Function {
@@ -599,7 +603,7 @@ impl<S: StateStore + std::fmt::Debug> Interpreter<S> {
                 );
                 InterpreterResult::Ok(())
             },    
-            Statement::ExpressionStatement(expression_statement) => {
+            Statement::ExpressionStatement(expression_statement, pos) => {
                 let _ = self.execute_expression(expression_statement);
                 InterpreterResult::Ok(())
             }
@@ -728,7 +732,7 @@ impl InterpreterObjectMethod {
                     "values" => {
                         let values = dict.iter().map(|(_, expr)| {
                             match expr {
-                                Expression::Literal(lit) => lit.clone(),
+                                Expression::Literal(lit, _) => lit.clone(),
                                 _ => Literal::Null,
                             }
                         }).collect();
@@ -743,7 +747,7 @@ impl InterpreterObjectMethod {
                         let key = &evaluated_arguments[0];
                         for (dict_key, dict_value) in dict {
                             if dict_key == key {
-                                if let Expression::Literal(literal) = dict_value {
+                                if let Expression::Literal(literal, _) = dict_value {
                                     return InterpreterResult::Ok(literal.clone());
                                 } else {
                                     return InterpreterResult::Err(InterpreterError::RuntimeError("Dictionary value is not a literal".into()));

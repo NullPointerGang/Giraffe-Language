@@ -1,5 +1,11 @@
 use ordered_float::OrderedFloat;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Position {
+    pub line: usize,
+    pub column: usize,
+}
+
 
 #[derive(Debug, Clone)]
 pub enum AstNode {
@@ -11,36 +17,36 @@ pub enum AstNode {
 
 #[derive(Debug, Clone)]
 pub enum Statement {
-    FunctionDeclaration(FunctionDeclaration),
-    VariableDeclaration(VariableDeclaration),
-    IfStatement(IfStatement),
-    WhileStatement(WhileStatement),
-    PrintStatement(PrintStatement),
-    ReturnStatement(ReturnStatement),
-    Assignment(Assignment),
-    ExpressionStatement(Expression),
-    Block(Vec<Statement>),
-    ForInStatement(String, Expression, Vec<Statement>),
-    TryHandleStatement(TryHandleStatement),
-    FunctionCall(String, Vec<Expression>)
+    FunctionDeclaration(FunctionDeclaration, Position),
+    VariableDeclaration(VariableDeclaration, Position),
+    IfStatement(IfStatement, Position),
+    WhileStatement(WhileStatement, Position),
+    PrintStatement(PrintStatement, Position),
+    ReturnStatement(ReturnStatement, Position),
+    Assignment(Assignment, Position),
+    ExpressionStatement(Expression, Position),
+    Block(Vec<Statement>, Position),
+    ForInStatement(String, Expression, Vec<Statement>, Position),
+    TryHandleStatement(TryHandleStatement, Position),
+    FunctionCall(String, Vec<Expression>, Position)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expression {
-    Literal(Literal),
-    Variable(String),
-    BinaryOperation(Box<Expression>, Operator, Box<Expression>),
-    FunctionCall(String, Vec<Expression>),
-    List(Vec<Expression>),
-    Dictionary(Vec<(Literal, Expression)>),
-    Tuple(Vec<Expression>),
-    Null,
+    Literal(Literal, Position),
+    Variable(String, Position),
+    BinaryOperation(Box<Expression>, Operator, Box<Expression>, Position),
+    FunctionCall(String, Vec<Expression>, Position),
+    List(Vec<Expression>, Position),
+    Dictionary(Vec<(Literal, Expression)>, Position),
+    Tuple(Vec<Expression>, Position),
+    Null(Position),
 
     // Сейчас нет нужды в MemberAccess
     // MemberAccess(Box<Expression>, String), 
     
-    MethodCall(Box<Expression>, String, Vec<Expression>),
-    Error(String),
+    MethodCall(Box<Expression>, String, Vec<Expression>, Position),
+    Error(String, Position),
     Break,
     Continue,
 }
@@ -164,76 +170,76 @@ impl AstNode {
 }
 
 impl Statement {
-    pub fn function_declaration(name: String, parameters: Vec<VariableDeclaration>, return_type: String, body: Vec<Statement>) -> Self {
-        Statement::FunctionDeclaration(FunctionDeclaration { name, parameters, return_type, body })
+    pub fn function_declaration(name: String, parameters: Vec<VariableDeclaration>, return_type: String, body: Vec<Statement>, position: Position) -> Self {
+        Statement::FunctionDeclaration(FunctionDeclaration { name, parameters, return_type, body }, position)
     }
 
-    pub fn variable_declaration(name: String, data_type: String, value: Option<Expression>) -> Self {
-        Statement::VariableDeclaration(VariableDeclaration { name, data_type, value })
+    pub fn variable_declaration(name: String, data_type: String, value: Option<Expression>, position: Position) -> Self {
+        Statement::VariableDeclaration(VariableDeclaration { name, data_type, value }, position)
     }
 
-    pub fn if_statement(condition: Expression, body: Vec<Statement>, elif: Option<IfStatement>, else_body: Option<Vec<Statement>>) -> Self {
+    pub fn if_statement(condition: Expression, body: Vec<Statement>, elif: Option<IfStatement>, else_body: Option<Vec<Statement>>, position: Position) -> Self {
         Statement::IfStatement(IfStatement { 
             condition, 
             body, 
             elif: elif.map(Box::new),
             else_body 
-        })
+        }, position)
     }    
 
-    pub fn while_statement(condition: Expression, body: Vec<Statement>) -> Self {
-        Statement::WhileStatement(WhileStatement { condition, body })
+    pub fn while_statement(condition: Expression, body: Vec<Statement>, position: Position) -> Self {
+        Statement::WhileStatement(WhileStatement { condition, body }, position)
     }
 
-    pub fn print_statement(value: Expression) -> Self {
-        Statement::PrintStatement(PrintStatement { value })
+    pub fn print_statement(value: Expression, position: Position) -> Self {
+        Statement::PrintStatement(PrintStatement { value }, position)
     }
 
-    pub fn return_statement(value: Option<Expression>) -> Self {
-        Statement::ReturnStatement(ReturnStatement { value })
+    pub fn return_statement(value: Option<Expression>, position: Position) -> Self {
+        Statement::ReturnStatement(ReturnStatement { value }, position)
     }
 
-    pub fn assignment(name: String, value: Expression) -> Self {
-        Statement::Assignment(Assignment { name, value })
+    pub fn assignment(name: String, value: Expression, position: Position) -> Self {
+        Statement::Assignment(Assignment { name, value }, position)
     }
 
-    pub fn for_in_statement(loop_var: String, collection: Expression, body: Vec<Statement>) -> Self {
-        Statement::ForInStatement(loop_var, collection, body)
+    pub fn for_in_statement(loop_var: String, collection: Expression, body: Vec<Statement>, position: Position) -> Self {
+        Statement::ForInStatement(loop_var, collection, body, position)
     }
 
-    pub fn try_handle_statement(try_handle_statement: TryHandleStatement) -> Self {
-        Statement::TryHandleStatement(try_handle_statement)
+    pub fn try_handle_statement(try_handle_statement: TryHandleStatement, position: Position) -> Self {
+        Statement::TryHandleStatement(try_handle_statement, position)
     }
 
-    pub fn break_statement() -> Self {
-        Statement::ExpressionStatement(Expression::Break)
+    pub fn break_statement(position: Position) -> Self {
+        Statement::ExpressionStatement(Expression::Break, position)
     }
 
-    pub fn continue_statement() -> Self {
-        Statement::ExpressionStatement(Expression::Continue)
+    pub fn continue_statement(position: Position) -> Self {
+        Statement::ExpressionStatement(Expression::Continue, position)
     }
 
 }
 
 impl Expression {
-    pub fn literal(literal: Literal) -> Self {
-        Expression::Literal(literal)
+    pub fn literal(literal: Literal, position: Position) -> Self {
+        Expression::Literal(literal, position)
     }
 
-    pub fn variable(name: String) -> Self {
-        Expression::Variable(name)
+    pub fn variable(name: String, position: Position) -> Self {
+        Expression::Variable(name, position)
     }
 
-    pub fn binary_operation(left: Expression, op: Operator, right: Expression) -> Self {
-        Expression::BinaryOperation(Box::new(left), op, Box::new(right))
+    pub fn binary_operation(left: Expression, op: Operator, right: Expression, position: Position) -> Self {
+        Expression::BinaryOperation(Box::new(left), op, Box::new(right), position)
     }
 
-    pub fn function_call(name: String, args: Vec<Expression>) -> Self {
-        Expression::FunctionCall(name, args)
+    pub fn function_call(name: String, args: Vec<Expression>, position: Position) -> Self {
+        Expression::FunctionCall(name, args, position)
     }
 
-    pub fn list(elements: Vec<Expression>) -> Self {
-        Expression::List(elements)
+    pub fn list(elements: Vec<Expression>, position: Position) -> Self {
+        Expression::List(elements, position)
     }
 
     pub fn dictionary<'a>(dictionary: &'a Vec<(Literal, Expression)>, key: &'a Literal) -> Option<&'a Expression> {
@@ -244,8 +250,8 @@ impl Expression {
         }
         None
     }
-    pub fn null() -> Self {
-        Expression::Null
+    pub fn null(position: Position) -> Self {
+        Expression::Null(position)
     }
 }
 

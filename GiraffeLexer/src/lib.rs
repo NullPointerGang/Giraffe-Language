@@ -1,5 +1,6 @@
 use regex::Regex;
 use std::collections::HashMap;
+use GiraffeAST::Position;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
@@ -51,17 +52,15 @@ pub enum TokenType {
 pub struct Token {
     pub token_type: TokenType,
     pub value: String,
-    pub line: usize,
-    pub column: usize,
+    pub position: Position,
 }
 
 impl Token {
-    pub fn new(token_type: TokenType, value: &str, line: usize, column: usize) -> Self {
+    pub fn new(token_type: TokenType, value: &str, position: Position) -> Self {
         Token {
             token_type,
             value: value.to_string(),
-            line,
-            column,
+            position,
         }
     }
 }
@@ -172,9 +171,11 @@ impl Lexer {
                         continue;
                     }
                     let value = &slice[mat.start()..mat.end()];
+
+                    let token_position = Position { line, column };
                     
                     if let Some(token_type) = token_type_opt {
-                        tokens.push(Token::new(token_type.clone(), value, line, column));
+                        tokens.push(Token::new(token_type.clone(), value, token_position));
                     }
 
                     for ch in value.chars() {
@@ -202,7 +203,7 @@ impl Lexer {
         }
 
         // Добавляем токен EOF с текущими координатами
-        tokens.push(Token::new(TokenType::EOF, "EOF", line, column));
+        tokens.push(Token::new(TokenType::EOF, "EOF", Position{line, column}));
         Ok(tokens)
     }
 }
