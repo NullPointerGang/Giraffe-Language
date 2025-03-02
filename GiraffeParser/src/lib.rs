@@ -7,8 +7,6 @@ use ordered_float::OrderedFloat;
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
-    code_line: usize,
-    code_pos: usize,
 }
 
 impl Parser {
@@ -17,8 +15,6 @@ impl Parser {
         Parser {
             tokens,
             pos: 0,
-            code_pos: 0,
-            code_line: 1,
         }
     }
 
@@ -31,8 +27,6 @@ impl Parser {
     fn advance(&mut self) {
         if self.pos < self.tokens.len() {
             let token = &self.tokens[self.pos];
-            self.code_line = token.line;
-            self.code_pos = token.column;
             
             self.pos += 1;
         }
@@ -144,27 +138,28 @@ impl Parser {
     /// Разбирает все ключевые слова и конструкции
     fn parse_statement(&mut self) -> Result<Statement, String> {
         let token = self.current().clone();
+        let position = token.position;
         match token.token_type {
             TokenType::KEYWORD => {
                 match token.value.as_str() {
-                    "func" => self.parse_function_declaration(),
-                    "var" | "const" => self.parse_variable_declaration(),
-                    "if" => self.parse_if_statement(),
-                    "while" => self.parse_while_statement(),
-                    "return" => self.parse_return_statement(),
-                    "for" => self.parse_for_statement(),
-                    "try" => self.parse_try_handle_statement(),
-                    "break" => self.parse_break_statement(),
-                    "continue" => self.parse_continue_statement(),
+                    "func" => self.parse_function_declaration(position),
+                    "var" | "const" => self.parse_variable_declaration(position),
+                    "if" => self.parse_if_statement(position),
+                    "while" => self.parse_while_statement(position),
+                    "return" => self.parse_return_statement(position),
+                    "for" => self.parse_for_statement(position),
+                    "try" => self.parse_try_handle_statement(position),
+                    "break" => self.parse_break_statement(position),
+                    "continue" => self.parse_continue_statement(position),
                     _ => Err(format!("Неожиданное ключевое слово: {}", token.value)),
                 }
             }
-            TokenType::PRINT => self.parse_print_statement(),
+            TokenType::PRINT => self.parse_print_statement(position),
             TokenType::IDENTIFIER => {
                 if self.peek_token_is(TokenType::OPERATOR, Some("=")) {
-                    self.parse_assignment()
+                    self.parse_assignment(position)
                 } else {
-                    let expr = self.parse_expression()?;
+                    let expr = self.parse_expression(position)?;
                     Ok(Statement::ExpressionStatement(expr))
                 }
             }            
@@ -173,19 +168,19 @@ impl Parser {
     }        
 
     /// Разбирает оператор break.
-    fn parse_break_statement(&mut self) -> Result<Statement, String> {
+    fn parse_break_statement(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::KEYWORD, Some("break"))?;
-        Ok(Statement::break_statement())
+        Ok(Statement::break_statement(position))
     }
 
     /// Разбирает оператор continue.
-    fn parse_continue_statement(&mut self) -> Result<Statement, String> {
+    fn parse_continue_statement(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::KEYWORD, Some("continue"))?;
-        Ok(Statement::continue_statement())
+        Ok(Statement::continue_statement(position))
     }
 
 
-    fn parse_try_handle_statement(&mut self) -> Result<Statement, String> {
+    fn parse_try_handle_statement(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::KEYWORD, Some("try"))?;
         let try_body = self.parse_block()?;
         
@@ -199,16 +194,12 @@ impl Parser {
             None
         };
         
-        Ok(Statement::try_handle_statement(TryHandleStatement {
-            try_body,
-            handle_body,
-            finally_body,
-        }))
+        Ok(Statement::try_handle_statement(try_body, handle_body, finally_body, position))
     }
     
 
     /// Разбирает цикл for
-    fn parse_for_statement(&mut self) -> Result<Statement, String> {
+    fn parse_for_statement(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::KEYWORD, Some("for"))?;
         self.expect(TokenType::BRACKET, Some("("))?;
         
@@ -216,19 +207,19 @@ impl Parser {
             let loop_var_token = self.expect(TokenType::IDENTIFIER, None)?;
             let loop_var = loop_var_token.value;
             self.expect(TokenType::KEYWORD, Some("in"))?;
-            let collection_expr = self.parse_expression()?;
+            let collection_expr = self.parse_expression(position)?;
             self.expect(TokenType::BRACKET, Some(")"))?;
             let body = self.parse_block()?;
             
-            return Ok(Statement::for_in_statement(loop_var, collection_expr, body));
+            return Ok(Statement::for_in_statement(loop_var, collection_expr, body, position));
         } else {
             let initializer = if self.check(TokenType::PUNCTUATION, Some(";")) {
                 None
             } else {
                 if self.check(TokenType::KEYWORD, Some("var")) || self.check(TokenType::KEYWORD, Some("const")) {
-                    Some(self.parse_variable_declaration()?)
+                    Some(self.parse_variable_declaration(position)?)
                 } else {
-                    Some(Statement::ExpressionStatement(self.parse_expression()?))
+                    Some(Statement::ExpressionStatement(self.parse_expression(position)?))
                 }
             };
             self.expect(TokenType::PUNCTUATION, Some(";"))?;
@@ -236,14 +227,14 @@ impl Parser {
             let condition = if self.check(TokenType::PUNCTUATION, Some(";")) {
                 None
             } else {
-                Some(self.parse_expression()?)
+                Some(self.parse_expression(position)?)
             };
             self.expect(TokenType::PUNCTUATION, Some(";"))?;
             
             let update = if self.check(TokenType::BRACKET, Some(")")) {
                 None
             } else {
-                Some(self.parse_expression()?)
+                Some(self.parse_expression(position)?)
             };
             self.expect(TokenType::BRACKET, Some(")"))?;
             
@@ -252,11 +243,17 @@ impl Parser {
                 body.push(Statement::ExpressionStatement(update_expr));
             }
             
-            let loop_condition = condition.unwrap_or(Expression::Literal(Literal::Boolean(true)));
-            let while_stmt = Statement::while_statement(loop_condition, body);
+            let loop_condition = condition.unwrap_or(Expression::Literal {
+                value: Literal::Boolean(true),
+                position,
+            });
+            let while_stmt = Statement::while_statement(loop_condition, body, position);
             
             if let Some(init_stmt) = initializer {
-                Ok(Statement::Block(vec![init_stmt, while_stmt]))
+                Ok(Statement::Block {
+                    body: vec![init_stmt, while_stmt],
+                    position,
+                })
             } else {
                 Ok(while_stmt)
             }
@@ -266,7 +263,7 @@ impl Parser {
 
     /// Разбирает объявление функции:
     /// func имя(параметры): возвращаемый_тип { тело }
-    fn parse_function_declaration(&mut self) -> Result<Statement, String> {
+    fn parse_function_declaration(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::KEYWORD, Some("func"))?;
         let name_token = self.expect(TokenType::IDENTIFIER, None)?;
         let name = name_token.value;
@@ -301,6 +298,7 @@ impl Parser {
                     name: param_name,
                     data_type,
                     value: None,
+                    position,
                 };
                 parameters.push(var_decl);
                 
@@ -332,12 +330,12 @@ impl Parser {
         }
         
         let body = self.parse_block()?;
-        Ok(Statement::function_declaration(name, parameters, return_type, body))
+        Ok(Statement::function_declaration(name, parameters, return_type, body, position))
     }    
     
     /// Разбирает объявление переменной:
     /// синтаксис: var/const имя [ ":" тип ] [ "=" выражение ]
-    fn parse_variable_declaration(&mut self) -> Result<Statement, String> {
+    fn parse_variable_declaration(&mut self, position: Position) -> Result<Statement, String> {
         let keyword_token = self.current().clone();
         if keyword_token.value != "var" && keyword_token.value != "const" {
             return Err(format!(
@@ -373,7 +371,7 @@ impl Parser {
 
         let mut value = None;
         if self.match_token(TokenType::OPERATOR, Some("=")) {
-            let expr = self.parse_expression()?;
+            let expr = self.parse_expression(position)?;
             value = Some(expr);
 
             if data_type.is_none() {
@@ -384,28 +382,28 @@ impl Parser {
             return Err("Тип переменной не указан и отсутствует инициализатор для автоопределения типа".to_string());
         }
         
-        Ok(Statement::variable_declaration(name, data_type.unwrap(), value))
+        Ok(Statement::variable_declaration(name, data_type.unwrap(), value, position))
     }
 
     /// Вспомогательная функция для определения типа выражения.
     fn infer_type_from_expression(&self, expr: &Expression) -> String {
         match expr {
-            Expression::Literal(Literal::Integer(_)) => "int".to_string(),
-            Expression::Literal(Literal::Float(_)) => "float".to_string(),
-            Expression::Literal(Literal::String(_)) => "string".to_string(),
-            Expression::Literal(Literal::Boolean(_)) => "bool".to_string(),
-            Expression::Literal(Literal::Null) => "null".to_string(),
-            Expression::List(_) => "list".to_string(),
-            Expression::Tuple(_) => "tuple".to_string(),
-            Expression::Dictionary(_) => "dict".to_string(),
-            Expression::FunctionCall(_, _) => "auto".to_string(),
+            Expression::Literal { value: Literal::Integer(_), .. } => "int".to_string(),
+            Expression::Literal { value: Literal::Float(_), .. } => "float".to_string(),
+            Expression::Literal { value: Literal::String(_), .. } => "string".to_string(),
+            Expression::Literal { value: Literal::Boolean(_), .. } => "bool".to_string(),
+            Expression::Literal { value: Literal::Null, .. } => "null".to_string(),
+            Expression::List { .. } => "list".to_string(),
+            Expression::Tuple { .. } => "tuple".to_string(),
+            Expression::Dictionary { .. } => "dict".to_string(),
+            Expression::FunctionCall { .. } => "auto".to_string(),
             _ => "auto".to_string(),
         }
     }
 
 
     /// Разбирает условный оператор if с опциональными elif и else. 
-    fn parse_if_statement(&mut self) -> Result<Statement, String> {
+    fn parse_if_statement(&mut self, position: Position) -> Result<Statement, String> {
         let keyword = self.current().value.clone();
         if keyword != "if" && keyword != "elif" {
             return Err(format!("Ожидался 'if' или 'elif', найдено: {}", keyword));
@@ -413,7 +411,7 @@ impl Parser {
         self.advance();
     
         self.expect(TokenType::BRACKET, Some("("))?;
-        let condition = self.parse_expression()?;
+        let condition = self.parse_expression(position)?;
         self.expect(TokenType::BRACKET, Some(")"))?;
         let body = self.parse_block()?;
     
@@ -421,7 +419,7 @@ impl Parser {
         let mut else_body: Option<Vec<Statement>> = None;
 
         if self.check(TokenType::KEYWORD, Some("elif")) {
-            if let Statement::IfStatement(if_stmt) = self.parse_if_statement()? {
+            if let Statement::IfStatement(if_stmt) = self.parse_if_statement(position)? {
                 elif_branch = Some(Box::new(if_stmt));
             } else {
                 return Err("Ожидался if для elif".to_string());
@@ -431,23 +429,23 @@ impl Parser {
             else_body = Some(self.parse_block()?);
         }
     
-        Ok(Statement::if_statement(condition, body, elif_branch.map(|b| *b), else_body))
+        Ok(Statement::if_statement(condition, body, elif_branch.map(|b| *b), else_body, position))
     }
 
     /// Разбирает цикл while:
     /// while (условие) { тело }
-    fn parse_while_statement(&mut self) -> Result<Statement, String> {
+    fn parse_while_statement(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::KEYWORD, Some("while"))?;
         self.expect(TokenType::BRACKET, Some("("))?;
-        let condition = self.parse_expression()?;
+        let condition = self.parse_expression(position)?;
         self.expect(TokenType::BRACKET, Some(")"))?;
         let body = self.parse_block()?;
-        Ok(Statement::while_statement(condition, body))
+        Ok(Statement::while_statement(condition, body, position))
     }
 
     /// Разбирает оператор печати:
     /// print!(выражение)
-    fn parse_print_statement(&mut self) -> Result<Statement, String> {
+    fn parse_print_statement(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::PRINT, Some("print!"))?;
         self.expect(TokenType::BRACKET, Some("("))?;
     
@@ -455,7 +453,7 @@ impl Parser {
 
         if !self.check(TokenType::BRACKET, Some(")")) {
             loop {
-                let arg = self.parse_expression()?;
+                let arg = self.parse_expression(position)?;
                 args.push(arg);
                 if self.check(TokenType::PUNCTUATION, Some(",")) {
                     self.advance();
@@ -466,30 +464,30 @@ impl Parser {
         }
     
         self.expect(TokenType::BRACKET, Some(")"))?;
-        Ok(Statement::print_statement(GiraffeAST::Expression::List(args)))
+        Ok(Statement::print_statement(GiraffeAST::Expression::List{elements: args, position}, position))
     }
 
     /// Разбирает оператор возврата:
     /// return [выражение]
-    fn parse_return_statement(&mut self) -> Result<Statement, String> {
+    fn parse_return_statement(&mut self, position: Position) -> Result<Statement, String> {
         self.expect(TokenType::KEYWORD, Some("return"))?;
         // Если следующего токена нет или он завершает блок – возвращаем без значения
         let value = if !self.check(TokenType::BRACKET, Some("}")) && !self.check(TokenType::EOF, None) {
-            Some(self.parse_expression()?)
+            Some(self.parse_expression(position)?)
         } else {
             None
         };
-        Ok(Statement::return_statement(value))
+        Ok(Statement::return_statement(value, position))
     }
 
     /// Разбирает оператор присваивания:
     /// идентификатор = выражение
-    fn parse_assignment(&mut self) -> Result<Statement, String> {
+    fn parse_assignment(&mut self, position: Position) -> Result<Statement, String> {
         let name_token = self.expect(TokenType::IDENTIFIER, None)?;
         let name = name_token.value;
         self.expect(TokenType::OPERATOR, Some("="))?;
-        let value = self.parse_expression()?;
-        Ok(Statement::assignment(name, value))
+        let value = self.parse_expression(position)?;
+        Ok(Statement::assignment_statement(name, value, position))
     }
 
     /// Разбирает блок операторов, заключённых в фигурные скобки.
@@ -512,116 +510,117 @@ impl Parser {
     // Функции разбора выражений с учётом приоритетов операторов.
     // =========================================================================
 
-    fn parse_expression(&mut self) -> Result<Expression, String> {
-        self.parse_logical_or()
+    fn parse_expression(&mut self, position: Position) -> Result<Expression, String> {
+        self.parse_logical_or(position)
     }
 
-    fn parse_logical_or(&mut self) -> Result<Expression, String> {
-        let mut expr = self.parse_logical_and()?;
+    fn parse_logical_or(&mut self, position: Position) -> Result<Expression, String> {
+        let mut expr = self.parse_logical_and(position)?;
         while self.check_operator("||") || self.check_keyword("or") {
-            let op = Operator::or();
+            let op = Operator::Or;
             self.advance();
-            let right = self.parse_logical_and()?;
-            expr = Expression::binary_operation(expr, op, right);
+            let right = self.parse_logical_and(position)?;
+            expr = Expression::binary_operation(expr, op, right, position);
         }
         Ok(expr)
     }
 
-    fn parse_logical_and(&mut self) -> Result<Expression, String> {
-        let mut expr = self.parse_equality()?;
+    fn parse_logical_and(&mut self, position: Position) -> Result<Expression, String> {
+        let mut expr = self.parse_equality(position)?;
         while self.check_operator("&&") || self.check_keyword("and") {
-            let op = Operator::and();
+            let op = Operator::And;
             self.advance();
-            let right = self.parse_equality()?;
-            expr = Expression::binary_operation(expr, op, right);
+            let right = self.parse_equality(position)?;
+            expr = Expression::binary_operation(expr, op, right, position);
         }
         Ok(expr)
     }
 
-    fn parse_equality(&mut self) -> Result<Expression, String> {
-        let mut expr = self.parse_comparison()?;
+    fn parse_equality(&mut self, position: Position) -> Result<Expression, String> {
+        let mut expr = self.parse_comparison(position)?;
         while self.check_operator("==") || self.check_operator("!=") {
             let op_token = self.current().clone();
             let op = match op_token.value.as_str() {
-                "==" => Operator::equal(),
-                "!=" => Operator::not_equal(),
+                "==" => Operator::Equal,
+                "!=" => Operator::NotEqual,
                 _ => return Err(format!("Неизвестный оператор равенства: {}", op_token.value)),
             };
             self.advance();
-            let right = self.parse_comparison()?;
-            expr = Expression::binary_operation(expr, op, right);
+            let right = self.parse_comparison(position)?;
+            expr = Expression::binary_operation(expr, op, right, position);
         }
         Ok(expr)
     }
 
-    fn parse_comparison(&mut self) -> Result<Expression, String> {
-        let mut expr = self.parse_term()?;
+    fn parse_comparison(&mut self, position: Position) -> Result<Expression, String> {
+        let mut expr = self.parse_term(position)?;
         while self.check_operator(">") || self.check_operator("<") || self.check_operator(">=") || self.check_operator("<=") {
         let op_token = self.current().clone();
         let op = match op_token.value.as_str() {
-            ">"  => Operator::greater_than(),
-            "<"  => Operator::less_than(),
-            ">=" => Operator::greater_than_or_equal(),
-            "<=" => Operator::less_than_or_equal(),
+            ">"  => Operator::GreaterThan,
+            "<"  => Operator::LessThan,
+            ">=" => Operator::GreaterThanOrEqual,
+            "<=" => Operator::LessThanOrEqual,
             _ => return Err(format!("Неизвестный оператор сравнения: {}", op_token.value)),
         };
         self.advance();
-        let right = self.parse_term()?;
-        expr = Expression::binary_operation(expr, op, right);
+        let right = self.parse_term(position)?;
+        expr = Expression::binary_operation(expr, op, right, position);
     }  
         Ok(expr)
     }
 
-    fn parse_term(&mut self) -> Result<Expression, String> {
-        let mut expr = self.parse_factor()?;
+    fn parse_term(&mut self, position: Position) -> Result<Expression, String> {
+        let mut expr = self.parse_factor(position)?;
         while self.check_operator("+") || self.check_operator("-") {
             let op_token = self.current().clone();
             let op = match op_token.value.as_str() {
-                "+" => Operator::add(),
-                "-" => Operator::subtract(),
+                "+" => Operator::Add,
+                "-" => Operator::Subtract,
                 _ => return Err(format!("Неизвестный оператор: {}", op_token.value)),
             };
             self.advance();
-            let right = self.parse_factor()?;
-            expr = Expression::binary_operation(expr, op, right);
+            let right = self.parse_factor(position)?;
+            expr = Expression::binary_operation(expr, op, right, position);
         }
         Ok(expr)
     }
 
-    fn parse_factor(&mut self) -> Result<Expression, String> {
-        let mut expr = self.parse_unary()?;
+    fn parse_factor(&mut self, position: Position) -> Result<Expression, String> {
+        let mut expr = self.parse_unary(position)?;
         while self.check_operator("*") || self.check_operator("/") {
             let op_token = self.current().clone();
             let op = match op_token.value.as_str() {
-                "*" => Operator::multiply(),
-                "/" => Operator::divide(),
+                "*" => Operator::Multiply,
+                "/" => Operator::Divide,
                 _ => return Err(format!("Неизвестный оператор: {}", op_token.value)),
             };
             self.advance();
-            let right = self.parse_unary()?;
-            expr = Expression::binary_operation(expr, op, right);
+            let right = self.parse_unary(position)?;
+            expr = Expression::binary_operation(expr, op, right, position);
         }
         Ok(expr)
     }
 
     /// Обрабатывает унарный минус.
-    fn parse_unary(&mut self) -> Result<Expression, String> {
+    fn parse_unary(&mut self, position: Position) -> Result<Expression, String> {
         if self.check_operator("-") {
             self.advance();
-            let expr = self.parse_unary()?;
+            let expr = self.parse_unary(position)?;
             // Представляем унарный минус как операцию: 0 - expr
             return Ok(Expression::binary_operation(
-                Expression::literal(Literal::Integer(0)),
-                Operator::subtract(),
+                Expression::literal(Literal::Integer(0), position),
+                Operator::Subtract,
                 expr,
+                position,
             ));
         }
-        self.parse_primary()
+        self.parse_primary(position)
     }
 
     /// Разбирает первичные выражения: литералы, идентификаторы (с возможным вызовом функции),
     /// группировку в круглых скобках, списки и словари.
-    fn parse_primary(&mut self) -> Result<Expression, String> {
+    fn parse_primary(&mut self, position: Position) -> Result<Expression, String> {
         let token = self.current().clone();
         
         let mut expr = match token.token_type {
@@ -630,28 +629,44 @@ impl Parser {
                     format!("Неверный формат целого числа: {}", token.value)
                 })?;
                 self.advance();
-                Expression::Literal(Literal::Integer(value))
+                Expression::Literal {
+                    value: Literal::Integer(value),
+                    position,
+                }
             }
             TokenType::FLOAT => {
                 let value: f64 = token.value.parse().map_err(|_| {
                     format!("Неверный формат числа с плавающей точкой: {}", token.value)
                 })?;
                 self.advance();
-                Expression::Literal(Literal::Float(OrderedFloat::from(value)))
+                Expression::Literal{
+                    value: Literal::Float(OrderedFloat::from(value)), 
+                    position
+                }
+
             }
             TokenType::STRING => {
                 let trimmed = token.value.trim_matches('"').to_string();
                 self.advance();
-                Expression::Literal(Literal::String(trimmed))
+                Expression::Literal{
+                    value: Literal::String(trimmed), 
+                    position
+                }
             }
             TokenType::BOOLEAN => {
                 let value = token.value == "true";
                 self.advance();
-                Expression::Literal(Literal::Boolean(value))
+                Expression::Literal{
+                    value: Literal::Boolean(value), 
+                    position
+                }
             }
             TokenType::NULL => {
                 self.advance();
-                Expression::Literal(Literal::Null)
+                Expression::Literal{
+                    value: Literal::Null, 
+                    position
+                }
             }
             TokenType::IDENTIFIER => {
                 let ident = token.value.clone();
@@ -661,7 +676,7 @@ impl Parser {
                     let mut args = Vec::new();
                     if !self.check(TokenType::BRACKET, Some(")")) {
                         loop {
-                            let arg = self.parse_expression()?;
+                            let arg = self.parse_expression(position)?;
                             args.push(arg);
                             if self.check(TokenType::PUNCTUATION, Some(",")) {
                                 self.advance();
@@ -671,21 +686,27 @@ impl Parser {
                         }
                     }
                     self.expect(TokenType::BRACKET, Some(")"))?;
-                    Expression::FunctionCall(ident, args)
+                    Expression::FunctionCall{
+                        name: ident, 
+                        args, 
+                        position}
                 } else {
-                    Expression::Variable(ident)
+                    Expression::Variable{
+                        name: ident, 
+                        position
+                    }
                 }
             }
             TokenType::BRACKET => {
                 if token.value == "(" {
                     self.advance();
-                    let expr = self.parse_expression()?;
+                    let expr = self.parse_expression(position)?;
                     self.expect(TokenType::BRACKET, Some(")"))?;
                     expr
                 } else if token.value == "[" {
-                    self.parse_list()?
+                    self.parse_list(position)?
                 } else if token.value == "{" {
-                    self.parse_dictionary()?
+                    self.parse_dictionary(position)?
                 } else {
                     return Err(format!("Неожиданный скобочный символ: {}", token.value));
                 }
@@ -693,12 +714,12 @@ impl Parser {
             _ => return Err(format!("Неожиданный токен в выражении: {:?}", token)),
         };
 
-        expr = self.parse_postfix(expr)?;
+        expr = self.parse_postfix(expr, position)?;
         Ok(expr)
     }
 
     /// Обрабатывает цепочку точечных обращений: вызовы методов или доступ к полям.
-    fn parse_postfix(&mut self, mut expr: Expression) -> Result<Expression, String> {
+    fn parse_postfix(&mut self, mut expr: Expression, position: Position) -> Result<Expression, String> {
         loop {
             if self.check_operator(".") {
                 self.advance();
@@ -710,7 +731,7 @@ impl Parser {
                     let mut args = Vec::new();
                     if !self.check(TokenType::BRACKET, Some(")")) {
                         loop {
-                            let arg = self.parse_expression()?;
+                            let arg = self.parse_expression(position)?;
                             args.push(arg);
                             if self.check(TokenType::PUNCTUATION, Some(",")) {
                                 self.advance();
@@ -720,7 +741,12 @@ impl Parser {
                         }
                     }
                     self.expect(TokenType::BRACKET, Some(")"))?;
-                    expr = Expression::MethodCall(Box::new(expr), member_name, args);
+                    expr = Expression::MethodCall{
+                        object: Box::new(expr), 
+                        method: member_name, 
+                        args, 
+                        position
+                    };
                 } 
                 // Сейчас нет нужды в MemberAccess
                 // else {
@@ -734,12 +760,12 @@ impl Parser {
     }
 
     /// Разбирает литерал списка: [ expr1, expr2, … ]
-    fn parse_list(&mut self) -> Result<Expression, String> {
+    fn parse_list(&mut self, position: Position) -> Result<Expression, String> {
         self.expect(TokenType::BRACKET, Some("["))?;
         let mut elements = Vec::new();
         if !self.check(TokenType::BRACKET, Some("]")) {
             loop {
-                let elem = self.parse_expression()?;
+                let elem = self.parse_expression(position)?;
                 elements.push(elem);
                 if self.check(TokenType::PUNCTUATION, Some(",")) {
                     self.advance();
@@ -749,21 +775,27 @@ impl Parser {
             }
         }
         self.expect(TokenType::BRACKET, Some("]"))?;
-        Ok(Expression::list(elements))
+        Ok(Expression::List{
+            elements,
+            position
+        })
     }
 
     /// Разбирает литерал словаря: { key1: value1, key2: value2, … }
-    fn parse_dictionary(&mut self) -> Result<Expression, String> {
+    fn parse_dictionary(&mut self, position: Position) -> Result<Expression, String> {
         self.expect(TokenType::BRACKET, Some("{"))?;
         let mut pairs = Vec::new();
         if !self.check(TokenType::BRACKET, Some("}")) {
             loop {
-                let key = match self.parse_expression()? {
-                    Expression::Literal(lit) => lit,
+                let key = match self.parse_expression(position)? {
+                    Expression::Literal{
+                        value: lit, 
+                        position
+                    } => lit,
                     _ => return Err("Dictionary keys must be literals".to_string()),
                 };
                 self.expect(TokenType::PUNCTUATION, Some(":"))?;
-                let value = self.parse_expression()?;
+                let value = self.parse_expression(position)?;
                 pairs.push((key, value));
                 if self.check(TokenType::PUNCTUATION, Some(",")) {
                     self.advance();
@@ -773,7 +805,10 @@ impl Parser {
             }
         }
         self.expect(TokenType::BRACKET, Some("}"))?;
-        Ok(Expression::Dictionary(pairs))
+        Ok(Expression::Dictionary{
+            entries: pairs, 
+            position
+        })
     }    
 
     // =========================================================================

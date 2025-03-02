@@ -1,10 +1,11 @@
 [package]
 name = "GiraffeLexer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
 regex="1.11.1"
+GiraffeAST = { path = "../GiraffeAST" }
 
 [profile.release]
 opt-level = 3

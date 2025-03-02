@@ -1,0 +1,33 @@
+func bubbleSort(arr: list) {
+    var arr = arr
+    print!("Starting bubble sort on array: ", arr)
+    var swapped = true
+    while (swapped) {
+        swapped = false
+        var i = 0
+        while (i < arr.len() - 1) {
+            if (arr.get(i) > arr.get(i+1)) {
+                var temp = arr.get(i)  
+                print!("Swapping: ", arr.get(i), " with ", arr.get(i+1))
+                arr.set(i, arr.get(i+1))
+                arr.set(i+1, temp)
+                swapped = true
+            }
+            i = i + 1
+        }
+        print!("Array after pass: ", arr)
+    }
+    print!("Sorted array: ", arr)
+    return arr
+}
+
+func benchmarkSort() {
+    var arr = [999, 100, 9998, 2, 123123, 3465, 35, 46, 35463]
+    print!("Unsorted array: ", arr)
+    var sorted = bubbleSort(arr)
+    print!("Sorted array: ", sorted)
+}
+
+func main() {
+    benchmarkSort()
+}

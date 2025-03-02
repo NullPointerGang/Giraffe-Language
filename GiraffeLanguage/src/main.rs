@@ -4,11 +4,12 @@ use std::process;
 use colored::*;
 use GiraffeLexer::Lexer;
 use GiraffeParser::Parser;
-use GiraffeInterpreter::{Interpreter, Context, InterpreterResult, Function, StateStore, print_error};
+use GiraffeInterpreter::{Interpreter, Context, InterpreterResult, Function, StateStore};
+use GiraffeError::print_error;
 use GiraffeAST::{AstNode, Statement};
 
 
-pub fn interpret(ast_node: AstNode) {
+pub fn interpret(ast_node: AstNode, filename: String) {
     let mut global_state = Context::new();
 
     if let AstNode::Program { statements } = &ast_node {
@@ -22,45 +23,19 @@ pub fn interpret(ast_node: AstNode) {
         }
     }
 
-    let mut interpreter = Interpreter::new(global_state.clone());
+    let mut interpreter = Interpreter::new(global_state.clone(), filename.clone());
 
     if let AstNode::Program { statements } = ast_node {
         for statement in statements {
             if !matches!(statement, Statement::FunctionDeclaration(_)) {
-                match interpreter.execute_statement(statement.clone()) {
-                    InterpreterResult::Ok(_) => {}
-                    InterpreterResult::Err(e) => {
-                        println!("Ошибка выполнения: {:?}", e);
-                
-                        print_error(
-                            "Ошибка выполнения",
-                            &[("Описание ошибки", format!("{:?}", e))],
-                            "unknown",
-                            0, 
-                            0,
-                        );
-                    }
-                }                
+                interpreter.execute_statement(statement.clone());            
             }
         }
     }
 
     if let Some(main_func) = global_state.get_function("main") {
         for statement in &main_func.body {
-            match interpreter.execute_statement(statement.clone()) {
-                InterpreterResult::Ok(_) => {}
-                InterpreterResult::Err(e) => {
-                    println!("Ошибка выполнения: {:?}", e);
-            
-                    print_error(
-                        "Ошибка выполнения",
-                        &[("Описание ошибки", format!("{:?}", e))],
-                        "unknown",
-                        0, 
-                        0,
-                    );
-                }
-            }            
+            interpreter.execute_statement(statement.clone());        
         }
     }
 }
@@ -95,7 +70,7 @@ fn main() {
             let program = parser.parse_program();
 
             if let Ok(program) = program {
-                interpret(program);
+                interpret(program, (*filename).to_string());
             } else {
                 let error_token = parser.get_current_token();
                 print_error(
@@ -104,8 +79,8 @@ fn main() {
                         ("Найденное значение", error_token.value.clone())
                     ],
                     filename,
-                    error_token.line,
-                    error_token.column,
+                    error_token.position.line,
+                    error_token.position.column,
                 );
                 println!(
                     "{}",
@@ -115,13 +90,7 @@ fn main() {
             }
         },
         Err(err) => {
-            print_error(
-                "Ошибка токенизации",
-                &[("Детали", format!("{:?}", err))],
-                filename,
-                0,
-                0,
-            );
+            
             process::exit(1);
         }
     }
